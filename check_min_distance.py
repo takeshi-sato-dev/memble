@@ -40,7 +40,7 @@ def main():
     X = np.array([[float(b[20:28]), float(b[28:36]), float(b[36:44])]
                   for b in body])
 
-    known = set(args.lipids.split()) | {"W", "WF", "NA", "CL", "ION", "NA+", "CL-"}
+    known = set(s[:5] for s in args.lipids.split()) | {"W", "WF", "NA", "CL", "ION", "NA+", "CL-"}
     # molecule id: lipids/solvent/ions by residue, protein (rest) all -1
     mol = np.array([resid[i] if resn[i] in known else -1 for i in range(n)])
     skip = set(args.exclude_beads.split())

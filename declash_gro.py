@@ -65,7 +65,7 @@ def molecule_id(meta, resid, lipids, solvions):
     internally."""
     n = len(meta)
     mol = np.empty(n, dtype=np.int64)
-    known = set(lipids) | set(solvions)
+    known = set(l[:5] for l in lipids) | set(solvions)
     for i in range(n):
         rn = meta[i][1].strip()
         mol[i] = resid[i] if rn in known else -1

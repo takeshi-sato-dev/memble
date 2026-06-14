@@ -104,7 +104,7 @@ def main():
                     help="discard this many initial frames before averaging "
                          "(use to drop the unequilibrated start)")
     args = ap.parse_args()
-    restrict = set(s.upper() for s in args.lipids.split()) if args.lipids else None
+    restrict = set(s.upper()[:5] for s in args.lipids.split()) if args.lipids else None
 
     if args.traj:
         try:
