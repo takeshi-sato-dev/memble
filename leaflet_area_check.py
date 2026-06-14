@@ -55,8 +55,16 @@ def read_gro(path):
     return recs
 
 
+def gro_key(name):
+    # GRO residue-name field is 5 chars; a longer moleculetype name (e.g.
+    # POP2_45) is written truncated (POP2_). Match on that 5-char key so long
+    # lipid names are still found in the built structure.
+    return name[:5]
+
+
 def head_bead_for(resname, recs):
-    names = set(a for (_, rn, a, _) in recs if rn == resname)
+    k = gro_key(resname)
+    names = set(a for (_, rn, a, _) in recs if rn == k)
     for p in HEAD_PRIORITY:
         if p in names:
             return p
@@ -85,15 +93,38 @@ def main():
     lipids = args.lipids.split()
     recs = read_gro(args.gro)
 
-    # midplane = mean z of all head beads of all lipid types
-    head_of = {}
+    # GRO truncates residue names to 5 chars, so a long moleculetype name
+    # (POP2_45) appears as POP2_ in the structure. Map each requested lipid to
+    # its 5-char gro key and match on that, so long names are not silently
+    # dropped (which would mis-report a leaflet as missing that lipid).
+    key2lp = {}
+    for lp in lipids:
+        k = gro_key(lp)
+        if k in key2lp and key2lp[k] != lp:
+            print("WARNING: lipids %s and %s share the 5-char gro key '%s'; the "
+                  "area check cannot separate them (counts merged under %s)."
+                  % (key2lp[k], lp, k, key2lp[k]))
+        else:
+            key2lp[k] = lp
+
+    # head bead per lipid, found via the 5-char key
+    head_of = {}            # full lipid name -> head bead name (or None)
     for lp in lipids:
         hb = head_bead_for(lp, recs)
         if hb is None:
             print("WARN: no head bead found for %s; skipping it" % lp)
         head_of[lp] = hb
 
-    head_zs = [z for (_, rn, a, z) in recs if rn in head_of and a == head_of[rn]]
+    def lp_head(rn):
+        # rn is the 5-char gro resname; return (full lipid, head bead) or (None, None)
+        lp = key2lp.get(rn)
+        return (lp, head_of.get(lp)) if lp is not None else (None, None)
+
+    head_zs = []
+    for (_, rn, a, z) in recs:
+        lp, hb = lp_head(rn)
+        if lp is not None and hb is not None and a == hb:
+            head_zs.append(z)
     if not head_zs:
         sys.exit("ERROR: no lipid head beads found; check --lipids names vs gro")
     mid = sum(head_zs) / len(head_zs)
@@ -102,8 +133,9 @@ def main():
     up = {lp: 0 for lp in lipids}
     lo = {lp: 0 for lp in lipids}
     for (resid, rn, a, z) in recs:
-        if rn in head_of and a == head_of[rn]:
-            (up if z >= mid else lo)[rn] += 1
+        lp, hb = lp_head(rn)
+        if lp is not None and hb is not None and a == hb:
+            (up if z >= mid else lo)[lp] += 1
 
     def area(counts):
         miss = [lp for lp in counts if lp not in APL]
