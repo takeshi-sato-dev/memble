@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#
+# memble-gui : launch the Streamlit GUI via the dedicated venv, no activate needed.
+#
+set -euo pipefail
+VENV=${MEMBLE_VENV:-$HOME/memble-venv}
+HERE=$(cd "$(dirname "$0")" && pwd)
+if [ ! -x "$VENV/bin/streamlit" ]; then
+  if [ -d "$VENV" ]; then
+    echo "streamlit not found in $VENV"
+    echo "install it with: $VENV/bin/pip install streamlit"
+  else
+    echo "venv not found at $VENV"
+    echo "create one with: ./setup.sh"
+    echo "or point to an existing venv: MEMBLE_VENV=/path/to/venv ./memble-gui"
+  fi
+  exit 1
+fi
+exec "$VENV/bin/streamlit" run "$HERE/app.py"

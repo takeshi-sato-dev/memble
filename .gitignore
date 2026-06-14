@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+
+# OS
+.DS_Store
+__MACOSX/
+
+# memble run outputs (built systems / trajectories belong on Zenodo, not git)
+*_work/
+membrane_work/
+popc_work/
+memble_work/
+*.xtc
+*.trr
+*.edr
+*.cpt
+*.tpr
+*.log
+mdout.mdp
+
+# local lipidome / force-field files (obtain from upstream, see README)
+m3lipidome/

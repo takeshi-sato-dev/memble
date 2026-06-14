@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# memble <protein.pdb> : run the Martini 3 builder via the dedicated venv,
+# WITHOUT activating it. The venv python/martinize2 and helper paths are wired
+# automatically; you only set the environment-specific bits and build options:
+#
+#   M3_DIR=/path/to/m3lipidome GMX=gmx LIPIDS="CHOL:1 DIPC:1 DPSM:1" ./memble prot.pdb
+#   N_REP=8 PARTNER="pdb=eff.pdb|offset=3|rotate=random" ... ./memble prot.pdb   # ensemble
+#
+set -euo pipefail
+VENV=${MEMBLE_VENV:-$HOME/memble-venv}
+HERE=$(cd "$(dirname "$0")" && pwd)
+[ -x "$VENV/bin/python" ] || { echo "venv missing at $VENV; run ./setup.sh first"; exit 1; }
+export PY="$VENV/bin/python"
+export MARTINIZE2="$VENV/bin/martinize2"
+export HELPER_REP="$HERE/replicate_and_fix_top.py"
+export HELPER_POS="$HERE/inject_posres.py"
+export HELPER_ORI="$HERE/orient_tm.py"
+export HELPER_AREA="$HERE/leaflet_area_check.py"
+export HELPER_PART="$HERE/place_partner.py"
+export HELPER_PRE="$HERE/prebuild_orient.py"
+export HELPER_ITP2STRUCT="$HERE/itp_to_struct.py"
+export HELPER_DECLASH="$HERE/declash_gro.py"
+export HELPER_ADDWATER="$HERE/add_water.py"
+export HELPER_PARTPULL="$HERE/add_partner_pull.py"
+export HELPER_FIXVS="$HERE/fix_vsites.py"
+export HELPER_FIXRESID="$HERE/fix_protein_resid.py"
+export HELPER_WHOLE="$HERE/make_protein_whole.py"
+export HELPER_MINDIST="$HERE/check_min_distance.py"
+export HELPER_GENSS="$HERE/gen_ss.py"
+if [ "${N_REP:-1}" -gt 1 ] 2>/dev/null; then
+  exec bash "$HERE/build_ensemble.sh" "$@"
+else
+  exec bash "$HERE/memble.sh" "$@"
+fi

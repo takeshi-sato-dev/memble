@@ -1,0 +1,41 @@
+# memble dependencies.
+#
+# Install everything into a dedicated virtual environment with:
+#   ./setup.sh
+# which creates ~/memble-venv and runs `pip install -r requirements.txt`.
+#
+# GROMACS is NOT pip-managed: install it separately (for example Homebrew
+# `brew install gromacs`, or a cluster module) and pass GMX=gmx to the build.
+#
+# DSSP is optional. memble accepts a secondary-structure string through
+# SS_OVERRIDE (for example SS_OVERRIDE=H for an all-helix transmembrane
+# peptide), so no external DSSP is needed. Note that DSSP 4.x is not
+# compatible with the martinize2 command line; if a real DSSP assignment is
+# wanted, install DSSP 2.2.1 or 3.0.0, or pass SS_OVERRIDE.
+
+# core numerics
+numpy
+scipy
+
+# COBY runtime imports these but does not declare them, so list them here
+matplotlib
+networkx
+
+# COBY declared dependencies (pip pulls these from COBY too, listed for clarity)
+alphashape
+shapely
+
+# topology and builders
+parmed
+COBY
+vermouth          # provides the martinize2 command
+
+# trajectory analysis, used by membrane_props.py and tm_tilt.py
+mdtraj
+
+# GUI (app.py)
+streamlit
+py3Dmol           # optional 3D preview in the GUI
+
+# tests
+pytest

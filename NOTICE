@@ -1,0 +1,13 @@
+memble
+Copyright [yyyy] [author name]
+
+This product is licensed under the Apache License, Version 2.0.
+
+This software builds on and invokes the following open-source tools, which are
+distributed under their own licenses and are not redistributed with memble:
+  COBY (Apache License 2.0)
+  martinize2 / Vermouth (Apache License 2.0)
+  GROMACS (GNU LGPL v2.1)
+  ParmEd, MDTraj (GNU LGPL)
+  NumPy, SciPy, NetworkX, matplotlib, Shapely (BSD), alphashape (MIT),
+  Streamlit (Apache License 2.0), py3Dmol / 3Dmol.js (BSD)
