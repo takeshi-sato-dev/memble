@@ -1,5 +1,7 @@
 # memble
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20684812.svg)](https://doi.org/10.5281/zenodo.20684812)
+
 A composition-general builder for Martini 3 membrane-protein systems, producing
 CHARMM-GUI-equivalent inputs (GROMACS topology, CHARMM PSF and CRD, a staged
 equilibration protocol, and an index file) without CHARMM-GUI. The tool takes an
@@ -205,3 +207,5 @@ Issues and pull requests are welcome. See `CONTRIBUTING.md`.
 If this tool is useful in your work, please cite the accompanying paper (see
 `paper.md`) and the underlying tools: Martini 3, martinize2 and Vermouth, COBY,
 GROMACS, and ParmEd.
+
+The software is archived on Zenodo: https://doi.org/10.5281/zenodo.20684812.
