@@ -458,8 +458,8 @@ fi
 # 5. per-lipid bead-count sanity assert
 # ====================================================================
 for nm in "${ALL[@]}"; do src=$(find_itp_for_mol "$nm")
-  bg=$(awk -v m="$nm" 'NR>2{rid=substr($0,1,5);rn=substr($0,6,5);gsub(/ /,"",rid);gsub(/ /,"",rn);
-    if(rn==m){if(first==""){first=rid};if(rid==first)c++}}END{print c+0}' system.gro)
+  bg=$(awk -v m="$nm" 'BEGIN{mk=substr(m,1,5)} NR>2{rid=substr($0,1,5);rn=substr($0,6,5);gsub(/ /,"",rid);gsub(/ /,"",rn);
+    if(rn==mk){if(first==""){first=rid};if(rid==first)c++}}END{print c+0}' system.gro)
   bi=$(awk -v mol="$nm" '
     function secname(l,t){t=l;gsub(/[][ \t\r]/,"",t);return t}
     /^\[/{sec=secname($0); if(sec=="moleculetype"){inmol=0;expectname=1}; next}
