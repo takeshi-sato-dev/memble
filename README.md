@@ -8,8 +8,6 @@ equilibration protocol, and an index file) without CHARMM-GUI. The tool takes an
 all-atom protein structure and a lipid composition and returns a system that is
 ready to minimize, equilibrate, and run in GROMACS 2023.
 
-> Working name. Rename the repository, the command, and the paper title to your
-> final project name before release.
 
 ## What it does
 
