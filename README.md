@@ -8,6 +8,8 @@ equilibration protocol, and an index file) without CHARMM-GUI. The tool takes an
 all-atom protein structure and a lipid composition and returns a system that is
 ready to minimize, equilibrate, and run in GROMACS 2023.
 
+> Working name. Rename the repository, the command, and the paper title to your
+> final project name before release.
 
 ## What it does
 
@@ -133,6 +135,9 @@ be adjusted and the system rebuilt.
 | `DSSP` | auto | path to a DSSP 2.2.1/3.x binary, or `mdtraj`; 4.x is not compatible with martinize2 |
 | `TM_CORE` | unset | per-chain TM core, e.g. `A:65-88;B:65-88`; used by `SS_MODE=tm` and by prebuilt orientation |
 | `PREBUILT_MULTI` | 0 | `1` uses the chains already assembled in the input PDB instead of replicating one chain |
+| `MULTI_TM` | 0 | `1` orients a multi-pass TM bundle (e.g. a 7-TM GPCR) on its helix bundle instead of one principal axis: every membrane-length helix is detected from DSSP and the membrane normal is set to the mean helix axis |
+| `MULTI_TM_MINLEN` | 12 | minimum helix length (residues) counted as a TM helix in `MULTI_TM` orientation |
+| `NTERM_SIDE` | unset | `up` or `down`: force the N-terminus to face +z (upper leaflet) or -z (lower leaflet). The orientation axis sign is otherwise arbitrary, so a multi-pass receptor can come out inverted. For a GPCR the N-terminus is extracellular, so `up` puts the extracellular side on the upper leaflet |
 | `RES_KEEP` | unset | per-chain residues to keep with `PREBUILT_MULTI`, e.g. `A:54-103;B:54-103` |
 | `AREA_TOL` | 0.08 | maximum leaflet area mismatch before abort |
 | `NPROD_STEPS` | 4e8 | production steps at 20 fs (8 microseconds) |
@@ -146,6 +151,25 @@ juxtamembrane should stay flexible, set `SS_MODE=tm`: the TM range becomes helix
 and everything else coil, independent of the input conformation and of DSSP. For
 multi-helix proteins such as GPCRs, keep `SS_MODE=dssp` so the loops, the
 membrane helices, and any peripheral helix are each assigned correctly.
+
+### Orienting a multi-pass TM bundle (GPCRs)
+
+A single-pass TM peptide has one membrane-spanning helix, so the long axis of
+that helix is the membrane normal. A multi-pass receptor (for example a 7-TM
+GPCR) is one chain folded into a bundle of helices, and the first principal
+component of the pooled coordinates points along the widest in-plane spread, not
+along the normal. Orienting on that axis lays the receptor on its side.
+
+Set `MULTI_TM=1` for these proteins. Every membrane-length helix is detected
+(from `SS_OVERRIDE` if given, otherwise from DSSP on the input), each helix axis
+is flipped into a common hemisphere, and the mean of those axes is used as the
+membrane normal. `PREBUILT_MULTI` and `MULTI_TM` address different things:
+`PREBUILT_MULTI` keeps several chains already assembled in the input, while
+`MULTI_TM` orients one chain that crosses the membrane several times. A GPCR is
+a single chain, so it uses `MULTI_TM=1` without `PREBUILT_MULTI`. Note that
+input structures with non-standard residues (bound ligands, lipids, sugars,
+ions) must have those removed before martinize2, which reads standard residues
+only.
 
 martinize2 cannot parse DSSP 4.x. Install a 3.x build, for example
 
@@ -206,4 +230,4 @@ If this tool is useful in your work, please cite the accompanying paper (see
 `paper.md`) and the underlying tools: Martini 3, martinize2 and Vermouth, COBY,
 GROMACS, and ParmEd.
 
-The software is archived on Zenodo: https://doi.org/10.5281/zenodo.20684812.
+The software is archived on Zenodo: https://doi.org/10.5281/zenodo.20684812

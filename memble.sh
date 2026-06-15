@@ -39,6 +39,7 @@ GMX=${GMX:?set GMX to your GROMACS 2023 binary}
 HELPER_REP=${HELPER_REP:?set HELPER_REP=/path/replicate_and_fix_top.py}
 HELPER_POS=${HELPER_POS:?set HELPER_POS=/path/inject_posres.py}
 HELPER_ORI=${HELPER_ORI:?set HELPER_ORI=/path/orient_tm.py}
+HELPER_SSDSSP=${HELPER_SSDSSP:-}       # path to ss_from_dssp.py (MULTI_TM orient only)
 HELPER_AREA=${HELPER_AREA:?set HELPER_AREA=/path/leaflet_area_check.py}
 HELPER_PART=${HELPER_PART:-}   # path to place_partner.py (required only if PARTNER set)
 HELPER_ITP2STRUCT=${HELPER_ITP2STRUCT:?set HELPER_ITP2STRUCT=/path/itp_to_struct.py}
@@ -86,6 +87,9 @@ PARTNER_MARGIN=${PARTNER_MARGIN:-1.0}        # nm outward play before flat-botto
 PARTNER_K=${PARTNER_K:-1000}                 # flat-bottom force constant
 PARTNER_ROTATE=${PARTNER_ROTATE:-none}       # none | random
 PREBUILT_MULTI=${PREBUILT_MULTI:-0}   # 1 = input PDB already holds the assembled chains
+MULTI_TM=${MULTI_TM:-0}               # 1 = multi-pass TM bundle (e.g. 7-TM GPCR): orient on the helix bundle
+MULTI_TM_MINLEN=${MULTI_TM_MINLEN:-}  # min helix length (res) counted as a TM helix in MULTI_TM orient
+NTERM_SIDE=${NTERM_SIDE:-}            # up|down: force the N-terminus to face +z (up) or -z (down) after orienting
 RES_KEEP=${RES_KEEP:-}                 # per-chain residues to keep, e.g. "A:54-103;B:54-103"
 TM_CORE=${TM_CORE:-}                   # per-chain TM core to center at z=0, e.g. "A:65-88;..."
 HELPER_PRE=${HELPER_PRE:-}             # path to prebuild_orient.py (PREBUILT_MULTI only)
@@ -162,7 +166,27 @@ if [ "$PREBUILT_MULTI" = 1 ]; then
   PRE=(--in input_aa.pdb --out oriented_aa.pdb --keep "$RES_KEEP"); [ -n "$TM_CORE" ] && PRE+=(--core "$TM_CORE")
   "$PY" "$HELPER_PRE" "${PRE[@]}"
 else
-  ORI=(--in input_aa.pdb --out oriented_aa.pdb); [ -n "$TM_RANGE" ] && ORI+=(--tm-range "$TM_RANGE")
+  ORI=(--in input_aa.pdb --out oriented_aa.pdb)
+  if [ "$MULTI_TM" = 1 ]; then
+    # multi-pass TM (e.g. 7-TM GPCR): orient on the helix bundle, not a single
+    # principal axis. Need a per-residue SS string; reuse SS_OVERRIDE if given,
+    # else derive helices from DSSP on the input structure.
+    if [ -n "$SS_OVERRIDE" ]; then
+      ORI_SS="$SS_OVERRIDE"
+    elif [ "$DSSP" = mdtraj ] || [ -z "$DSSP" ]; then
+      ORI_SS=$("$PY" "$HELPER_SSDSSP" --pdb input_aa.pdb 2>/dev/null) || ORI_SS=""
+    else
+      ORI_SS=$("$PY" "$HELPER_SSDSSP" --pdb input_aa.pdb --dssp "$DSSP" 2>/dev/null) || ORI_SS=""
+    fi
+    [ -n "$ORI_SS" ] || { echo "ERROR: MULTI_TM=1 needs a secondary-structure string; set SS_OVERRIDE or provide a working DSSP"; exit 1; }
+    ORI+=(--multi-tm --ss "$ORI_SS")
+    [ -n "$MULTI_TM_MINLEN" ] && ORI+=(--multi-tm-minlen "$MULTI_TM_MINLEN")
+    [ -n "$NTERM_SIDE" ] && ORI+=(--nterm-side "$NTERM_SIDE")
+    echo ">>> MULTI_TM=1: orienting on TM helix bundle (SS length ${#ORI_SS})"
+  else
+    [ -n "$TM_RANGE" ] && ORI+=(--tm-range "$TM_RANGE")
+    [ -n "$NTERM_SIDE" ] && ORI+=(--nterm-side "$NTERM_SIDE")
+  fi
   "$PY" "$HELPER_ORI" "${ORI[@]}"
 fi
 
@@ -557,7 +581,14 @@ for ln in flat:
     st = ln.strip()
     if st.startswith('['):
         skip = st.strip('[] ').lower().startswith('virtual_sites')
-    if not skip: keep.append(ln)
+    # Drop the data lines of virtual_sites sections (parmed cannot parse them),
+    # but always keep preprocessor directives (#ifdef/#ifndef/#else/#endif/
+    # #define) so their pairing stays balanced. A virtual_sites section can sit
+    # between a #ifdef and its #endif; dropping the directive lines too would
+    # leave an orphan #endif and break the parmed read.
+    if skip and not st.startswith('#'):
+        continue
+    keep.append(ln)
 open('system_parmed.top', 'w').write(''.join(keep))
 top = pmd.load_file('system_parmed.top', xyz='system.gro', parametrize=False)
 # protein residues, in order: ncopy TM-JM copies then each partner; one PRO chain per block

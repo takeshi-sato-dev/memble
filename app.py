@@ -68,6 +68,12 @@ def build_env(form, helpers_dir):
     # DSSP 4.x is rejected by vermouth; 'mdtraj' uses mdtraj's internal DSSP
     env["DSSP"] = form.get("dssp") or "mdtraj"
     env["SS_MODE"] = form.get("ss_mode") or "dssp"
+    if form.get("multi_tm"):
+        env["MULTI_TM"] = "1"
+        if form.get("multi_tm_minlen"):
+            env["MULTI_TM_MINLEN"] = str(form["multi_tm_minlen"])
+    if form.get("nterm_side") and form["nterm_side"] != "auto":
+        env["NTERM_SIDE"] = form["nterm_side"]
     if form.get("ss_override"):
         env["SS_OVERRIDE"] = form["ss_override"]
     if form.get("z_shift"):
@@ -80,6 +86,7 @@ def build_env(form, helpers_dir):
     env["HELPER_REP"] = str(Path(helpers_dir) / "replicate_and_fix_top.py")
     env["HELPER_POS"] = str(Path(helpers_dir) / "inject_posres.py")
     env["HELPER_ORI"] = str(Path(helpers_dir) / "orient_tm.py")
+    env["HELPER_SSDSSP"] = str(Path(helpers_dir) / "ss_from_dssp.py")
     env["HELPER_AREA"] = str(Path(helpers_dir) / "leaflet_area_check.py")
     env["HELPER_PART"] = str(Path(helpers_dir) / "place_partner.py")
     env["HELPER_PRE"] = str(Path(helpers_dir) / "prebuild_orient.py")
@@ -165,6 +172,26 @@ def main():
                  "everything else to coil, so the juxtamembrane stays flexible "
                  "(single-pass TM and TM-JM peptides). SS_MODE=tm needs the TM "
                  "range or TM-core ranges set below, and uses no DSSP.")
+        multi_tm = st.toggle(
+            "Multi-pass TM bundle (e.g. 7-TM GPCR)",
+            help="Orient on the helix bundle instead of one principal axis. "
+                 "Detects every membrane-length helix from DSSP and sets the "
+                 "membrane normal to the mean helix axis. Use for GPCRs and "
+                 "other multi-pass receptors. Single-pass TM peptides leave "
+                 "this off.")
+        multi_tm_minlen = ""
+        if multi_tm:
+            multi_tm_minlen = st.text_input(
+                "Minimum helix length counted as a TM helix (residues)", "12")
+        nterm_side = st.selectbox(
+            "N-terminus side (membrane orientation)",
+            ["auto", "up", "down"],
+            help="The orientation axis sign is arbitrary, so a multi-pass "
+                 "receptor can come out inverted. Set up to put the N-terminus "
+                 "on the upper leaflet, down for the lower leaflet. For a GPCR "
+                 "the N-terminus is extracellular, so up places the "
+                 "extracellular side on the upper leaflet. auto leaves the sign "
+                 "as computed.")
         st.caption("Backend tools required: COBY, martinize2, GROMACS, DSSP.")
 
     workdir = Path(out_dir).expanduser() if out_dir.strip() \
@@ -260,6 +287,8 @@ def main():
         form = dict(
             pep_aa=str(pep_path), m3_dir=m3_dir, gmx=gmx, dssp=dssp,
             ss_override=ss_override, ss_mode=ss_mode, z_shift=z_shift,
+            multi_tm=multi_tm, multi_tm_minlen=multi_tm_minlen,
+            nterm_side=nterm_side,
             prebuilt_multi=prebuilt_multi, res_keep=res_keep, tm_core=tm_core,
             asym=asym, lipids=lip, upper=upper, lower=lower,
             n_copy=int(n_copy), box_x=(box_x or None), box_y=(box_y or None),

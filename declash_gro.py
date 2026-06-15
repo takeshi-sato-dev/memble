@@ -65,6 +65,9 @@ def molecule_id(meta, resid, lipids, solvions):
     internally."""
     n = len(meta)
     mol = np.empty(n, dtype=np.int64)
+    # GRO truncates residue names to 5 chars; key lipids on that so a long name
+    # (POP2_45 -> POP2_) is treated as its own rigid molecule, not lumped with
+    # the protein, during declashing.
     known = set(l[:5] for l in lipids) | set(solvions)
     for i in range(n):
         rn = meta[i][1].strip()

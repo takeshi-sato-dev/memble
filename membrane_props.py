@@ -104,6 +104,8 @@ def main():
                     help="discard this many initial frames before averaging "
                          "(use to drop the unequilibrated start)")
     args = ap.parse_args()
+    # GRO truncates residue names to 5 chars; match on the 5-char key so long
+    # moleculetype names (e.g. POP2_45 -> POP2_) are still counted.
     restrict = set(s.upper()[:5] for s in args.lipids.split()) if args.lipids else None
 
     if args.traj:
