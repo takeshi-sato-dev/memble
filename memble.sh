@@ -198,8 +198,11 @@ MZ=(-ff martini3001 -f oriented_aa.pdb -x cg_peptide.pdb -o protein_only.top -p 
 if [ -n "$SS_OVERRIDE" ]; then
   MZ+=(-ss "$SS_OVERRIDE")
 elif [ "$SS_MODE" = tm ]; then
-  SS_TM=${TM_CORE:-}; [ -n "$SS_TM" ] || { [ -n "$TM_RANGE" ] && SS_TM="ALL:$TM_RANGE"; }
-  [ -n "$SS_TM" ] || { echo "ERROR: SS_MODE=tm needs TM_CORE (e.g. 'A:65-88;B:65-88') or TM_RANGE"; exit 1; }
+  # gen_ss.py wants CHAIN:start-end, but TM_RANGE is written start:end on the
+  # command line, so ALL:$TM_RANGE would hand it "ALL:65:88" and it would
+  # reject the range. Convert the separator instead of failing.
+  SS_TM=${TM_CORE:-}; [ -n "$SS_TM" ] || { [ -n "$TM_RANGE" ] && SS_TM="ALL:${TM_RANGE/:/-}"; }
+  [ -n "$SS_TM" ] || { echo "ERROR: SS_MODE=tm needs TM_RANGE (e.g. '65:88') or TM_CORE (e.g. 'A:65-88;B:65-88')"; exit 1; }
   SS_STR=$("$PY" "$HELPER_GENSS" --pdb oriented_aa.pdb --tm "$SS_TM") || { echo "ERROR: SS generation failed"; exit 1; }
   [ -n "$SS_STR" ] || { echo "ERROR: SS_MODE=tm produced an empty SS string"; exit 1; }
   echo ">>> SS_MODE=tm: TM=$SS_TM -> SS length ${#SS_STR} (TM helix, rest coil)"

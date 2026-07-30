@@ -171,11 +171,37 @@ def tm_indices_auto(cas, window):
 
 
 def tm_indices_from_range(rng, cas):
-    a, b = rng.split(":")
-    a, b = int(a), int(b)
+    """Residue indices inside one START:END (or START-END) resSeq range.
+
+    Both separators are accepted because the same range is written START:END on
+    the command line (TM_RANGE) and START-END inside a per-chain TM_CORE token,
+    and a leading "TM_RANGE=" is stripped because the browser form takes the
+    value alone. A per-chain list such as "A:65-88;B:65-88" is not a TM_RANGE;
+    say so instead of failing inside int().
+    """
+    spec = rng.strip().split("=")[-1].strip()
+    if ";" in spec or "," in spec:
+        sys.exit("ERROR: --tm-range takes one START:END range, got %r. A "
+                 "per-chain list belongs in TM_CORE, not TM_RANGE." % rng)
+    sep = ":" if ":" in spec else ("-" if "-" in spec else None)
+    if sep is None:
+        sys.exit("ERROR: --tm-range needs START:END or START-END, got %r" % rng)
+    parts = spec.split(sep)
+    if len(parts) != 2:
+        sys.exit("ERROR: --tm-range needs exactly one START%sEND pair, got %r"
+                 % (sep, rng))
+    try:
+        a, b = int(parts[0]), int(parts[1])
+    except ValueError:
+        sys.exit("ERROR: --tm-range must be two integers, got %r" % rng)
+    if a > b:
+        a, b = b, a
     idx = [i for i, (rs, _, _) in enumerate(cas) if a <= rs <= b]
     if not idx:
-        sys.exit("ERROR: no residues in --tm-range %s" % rng)
+        present = [c[0] for c in cas]
+        sys.exit("ERROR: no residues in --tm-range %s; the structure numbers "
+                 "residues %d-%d, so give the range in that numbering"
+                 % (rng, min(present), max(present)))
     return idx
 
 

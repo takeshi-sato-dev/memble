@@ -203,7 +203,9 @@ def main():
     with col1:
         st.subheader("Protein")
         pep = st.file_uploader("All-atom protein PDB", type=["pdb"])
-        tm_range = st.text_input("TM range override (resSeq, e.g. 619:641)", "")
+        tm_range = st.text_input("TM range override (resSeq, e.g. 65:88)", "")
+        # the form takes the value alone; tolerate a pasted "TM_RANGE=65:88"
+        tm_range = tm_range.strip().split("=")[-1].strip()
         prebuilt_multi = st.toggle("Use multi-chain assembly as-is "
                                    "(PREBUILT_MULTI; no replication)")
         if prebuilt_multi:
