@@ -96,6 +96,20 @@ HELPER_PRE=${HELPER_PRE:-}             # path to prebuild_orient.py (PREBUILT_MU
 PROT_FC=(1000 500 200 100 50 10); LIP_FC=(400 200 100 50 20 0)
 STAGE_DT=(0.002 0.005 0.010 0.015 0.020 0.020); STAGE_NS=(${STAGE_NS:-0.5 0.5 1 1 2 5})
 
+# Resolve every user-supplied path before the cd below. The build changes
+# directory into $WORK, so a relative path given on the command line would no
+# longer resolve: "./memble protein_AA.pdb" used to die at the first cp with
+# "No such file or directory". Resolve against the directory the command was
+# run from, and fail early with a clear message if the input is missing.
+_abs(){ case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd)" "$1" ;; esac; }
+PEP_AA=$(_abs "$PEP_AA")
+M3_DIR=$(_abs "$M3_DIR")
+[ -z "$PARTNER_PDB" ] || PARTNER_PDB=$(_abs "$PARTNER_PDB")
+case "$DSSP" in ""|mdtraj|/*) ;; */*) DSSP=$(_abs "$DSSP") ;; esac
+[ -f "$PEP_AA" ] || { echo "ERROR: protein PDB not found: $PEP_AA"; exit 1; }
+[ -d "$M3_DIR" ] || { echo "ERROR: M3_DIR is not a directory: $M3_DIR"; exit 1; }
+[ -z "$PARTNER_PDB" ] || [ -f "$PARTNER_PDB" ] || { echo "ERROR: PARTNER_PDB not found: $PARTNER_PDB"; exit 1; }
+
 WORK=$(pwd)/${OUTTAG}_work
 rm -rf "$WORK"                     # start clean: remove any previous build output
 mkdir -p "$WORK"; cd "$WORK"; cp "$PEP_AA" input_aa.pdb
@@ -438,6 +452,17 @@ if [ -n "$PARTNER_CG" ]; then
         --water-nm "$PARTNER_WATER" --salt "$SALT_M" --keep-box || true
   fi
 elif [ -n "$HELPER_ADDWATER" ]; then
+  # Make the protein contiguous BEFORE sizing the box. add_water derives
+  # box_z from the protein z-extent it can see; while a chain is still split
+  # across the z boundary that extent is the wrapped one, which for a tall
+  # TM-JM assembly is far smaller than the real span (6.95 vs 13.73 nm in the
+  # four-copy EGFR build), so the box came out ~7 nm too short and the protein
+  # ended up overlapping its own periodic image. Unwrap first, then size.
+  # The call after the solvation step below stays: it re-centres in the final
+  # box and reports the resulting water cushion.
+  if [ -n "$HELPER_WHOLE" ] && [ -f "$HELPER_WHOLE" ]; then
+    "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir . >/dev/null 2>&1 || true
+  fi
   "$PY" "$HELPER_ADDWATER" --gro system.gro --top system.top \
       --water-nm "$WATER_NM" --salt "$SALT_M" || true
 fi
