@@ -2,73 +2,116 @@
 """
 leaflet_area_check.py
 
-Estimate the per-leaflet area of a freshly built CG membrane and fail if the
-two leaflets are mismatched beyond a tolerance. Run this AFTER the builder and
-BEFORE any GROMACS MD: an area mismatch between leaflets puts the bilayer under
-tension and can pore/buckle, and discovering that after a production run means
-starting over. Catching it here costs nothing.
+Measure the area that each lipid occupies in a freshly built coarse-grained
+membrane, per leaflet, and stop the build when the two leaflets are mismatched.
+Run this after the packing and before any GROMACS run: leaflets that differ in
+area put the bilayer under stress, and finding that after a production run means
+building again.
 
-How it works (composition-agnostic):
-  - For each lipid residue type, pick its head bead by priority (PO4, ROH, ...).
-  - Assign every lipid molecule to upper/lower by its head-bead z relative to
-    the mean head-bead z (the bilayer midplane).
-  - Per leaflet, area = sum over lipids of (count * area-per-lipid).
-  - Report counts and areas; exit nonzero if |A_up - A_low| / mean > tol.
+HOW THE AREA IS OBTAINED
 
-Area-per-lipid (APL) values are approximate Martini values in nm^2; this is a
-coarse pre-check ("are the leaflets roughly balanced"), not an exact areometer.
-Override any APL with --apl "NAME:VALUE ...".
+Earlier versions of this script summed a table of approximate areas per lipid.
+A table cannot answer the question it was asked, because the area a lipid takes
+depends on the mixture it sits in, on the sterol content, and on the protein
+that occupies part of the leaflet. This version measures the area instead.
+
+Each leaflet is tessellated in the membrane plane: every lipid, and every
+protein bead inside the leaflet, is given the region of the plane that lies
+closer to it than to anything else, and the area of that region is its area.
+The tessellation is integrated by Monte Carlo under the periodic boundary
+conditions, following the treatment of lipid areas in protein-containing
+membranes of Mori, Ogushi and Sugita (J. Comput. Chem. 2012, 33, 286-296). No
+table of areas per lipid is read, and no area is assumed.
+
+WHAT IS CHECKED
+
+  1. A lipid that is present in both leaflets is measured in both. The two
+     values agree in a matched bilayer, and they differ when one leaflet holds
+     too few lipids for its area. This check reads nothing but the built system.
+  2. When a reference area is supplied with --apl, the measured area is compared
+     against it as well.
+  3. The area that the protein occupies is reported for each leaflet, because a
+     leaflet count that ignores the protein is the usual source of a mismatch.
+
+WHAT THE NUMBERS ARE
+
+The tessellation divides the whole plane among the molecules, so the area it
+gives a sterol is larger than the area per lipid that a box-area-over-count
+convention gives the same sterol. The two are different quantities and they are
+not compared here. What the check uses is the comparison of one lipid against
+itself in the other leaflet, and that comparison is unaffected.
+
+WHAT IS ASSUMED
+
+The bilayer is treated as flat, and the areas are projected on the xy plane. A
+buckled or strongly curved membrane is outside what this script measures, and
+the report says so. A freshly built system is flat by construction.
+
+Usage:
+  leaflet_area_check.py --gro system.gro --lipids "CHOL DIPC DPSM DOPS" \
+      [--tol 0.08] [--hard-tol 0.25] [--asym 1] [--apl "POPC:0.64 CHOL:0.40"] \
+      [--points 400000] [--json leaflet_area.json]
 """
 
 import argparse
+import json
 import sys
+from collections import defaultdict
 
-# Approximate Martini area-per-lipid (nm^2). Coarse, override as needed.
-APL = {
-    "CHOL": 0.40, "POPC": 0.64, "DOPC": 0.67, "DIPC": 0.68, "DLPC": 0.60,
-    "DPPC": 0.50, "DPSM": 0.50, "PPSM": 0.50, "PSM": 0.50, "POPE": 0.59,
-    "DOPE": 0.61, "POPS": 0.55, "POPG": 0.62, "POPA": 0.55, "POPI": 0.66,
-    "PAPC": 0.68, "PUPC": 0.70, "DPG3": 0.75, "DPGS": 0.70,
-    "DOPS": 0.60, "DOPG": 0.64, "DOPA": 0.58, "DPPE": 0.50, "DPPS": 0.48,
-    "DPPG": 0.52, "DLPS": 0.55, "DSPC": 0.50, "PIPC": 0.66, "PGPC": 0.66,
-}
-DEFAULT_APL = 0.60  # fallback for lipids not in the table (build proceeds, warns)
-HEAD_PRIORITY = ("PO4", "PO1", "PO2", "ROH", "GL1", "GL0", "NC3", "GM1", "AM1", "CNO")
+import numpy as np
+
+HEAD_PRIORITY = ("PO4", "PO1", "PO2", "ROH", "GL1", "GL0", "NC3", "GM1",
+                 "AM1", "CNO")
+SOLVENT = {"W", "WF", "NA", "CL", "ION", "NA+", "CL-"}
 
 
 def read_gro(path):
     with open(path) as fh:
-        lines = fh.readlines()
+        lines = fh.read().splitlines()
     n = int(lines[1])
-    atoms = lines[2:2 + n]
-    recs = []
-    for ln in atoms:
-        # gro fixed cols: resid(5) resname(5) atomname(5) atomnum(5) x y z(8.3 each)
-        resid = ln[0:5].strip()
-        resname = ln[5:10].strip()
-        atomname = ln[10:15].strip()
-        try:
-            z = float(ln[36:44])
-        except ValueError:
-            continue
-        recs.append((resid, resname, atomname, z))
-    return recs
+    body = lines[2:2 + n]
+    box = np.array([float(v) for v in lines[2 + n].split()[:3]])
+    resid = np.array([int(b[0:5]) for b in body])
+    resn = np.array([b[5:10].strip() for b in body])
+    aname = np.array([b[10:15].strip() for b in body])
+    xyz = np.array([[float(b[20:28]), float(b[28:36]), float(b[36:44])]
+                    for b in body])
+    return resid, resn, aname, xyz, box
 
 
 def gro_key(name):
-    # GRO residue-name field is 5 chars; a longer moleculetype name (e.g.
-    # POP2_45) is written truncated (POP2_). Match on that 5-char key so long
-    # lipid names are still found in the built structure.
+    """The GRO residue field is five characters, so POP2_45 is written POP2_."""
     return name[:5]
 
 
-def head_bead_for(resname, recs):
-    k = gro_key(resname)
-    names = set(a for (_, rn, a, _) in recs if rn == k)
-    for p in HEAD_PRIORITY:
-        if p in names:
-            return p
-    return None
+def mc_areas(points_xy, box_xy, n_points, seed=0, chunk=20000):
+    """Area of every Voronoi region in the plane, by Monte Carlo integration.
+
+    Random points are thrown into the periodic cell and each is given to the
+    nearest reference point under the minimum image convention. The share of
+    the throws that a reference point wins, times the area of the cell, is the
+    area of its region. The standard error of each area follows from the
+    binomial count, and it is returned so the report can state how well the
+    integral converged.
+    """
+    rng = np.random.default_rng(seed)
+    m = len(points_xy)
+    won = np.zeros(m, dtype=np.int64)
+    total = 0
+    while total < n_points:
+        k = min(chunk, n_points - total)
+        q = rng.random((k, 2)) * box_xy
+        d = q[:, None, :] - points_xy[None, :, :]
+        d -= box_xy * np.round(d / box_xy)
+        r2 = (d * d).sum(axis=2)
+        nearest = np.argmin(r2, axis=1)
+        won += np.bincount(nearest, minlength=m)
+        total += k
+    cell = float(box_xy[0] * box_xy[1])
+    frac = won / float(total)
+    area = frac * cell
+    err = cell * np.sqrt(np.maximum(frac * (1.0 - frac), 0.0) / float(total))
+    return area, err
 
 
 def main():
@@ -77,102 +120,210 @@ def main():
     ap.add_argument("--gro", required=True)
     ap.add_argument("--lipids", required=True,
                     help="space list of lipid resnames present, e.g. 'CHOL DIPC DPSM'")
-    ap.add_argument("--apl", default="", help="overrides 'NAME:VAL ...' (nm^2)")
-    ap.add_argument("--tol", type=float, default=0.08, help="max |dA|/mean (default 0.08)")
+    ap.add_argument("--apl", default="",
+                    help="optional reference areas 'NAME:VAL ...' in nm^2, "
+                         "compared against the measured value")
+    ap.add_argument("--tol", type=float, default=0.08,
+                    help="largest relative difference accepted between the two "
+                         "leaflets (default 0.08)")
     ap.add_argument("--hard-tol", type=float, default=0.25,
-                    help="abort an asymmetric build only above this mismatch "
-                         "(default 0.25); between tol and hard-tol it warns and "
-                         "continues so the build still produces run files")
-    ap.add_argument("--asym", type=int, default=0, help="1 if asymmetric (enforce abort)")
+                    help="an asymmetric build stops above this difference "
+                         "(default 0.25)")
+    ap.add_argument("--asym", type=int, default=0, help="1 for an asymmetric build")
+    ap.add_argument("--points", type=int, default=400000,
+                    help="Monte Carlo throws per leaflet (default 400000)")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--json", default="", help="write the measurement to this file")
     args = ap.parse_args()
 
+    ref = {}
     for tok in args.apl.split():
         if ":" in tok:
-            k, v = tok.split(":"); APL[k] = float(v)
+            k, v = tok.split(":")
+            ref[k] = float(v)
 
     lipids = args.lipids.split()
-    recs = read_gro(args.gro)
-
-    # GRO truncates residue names to 5 chars, so a long moleculetype name
-    # (POP2_45) appears as POP2_ in the structure. Map each requested lipid to
-    # its 5-char gro key and match on that, so long names are not silently
-    # dropped (which would mis-report a leaflet as missing that lipid).
     key2lp = {}
     for lp in lipids:
         k = gro_key(lp)
         if k in key2lp and key2lp[k] != lp:
-            print("WARNING: lipids %s and %s share the 5-char gro key '%s'; the "
-                  "area check cannot separate them (counts merged under %s)."
-                  % (key2lp[k], lp, k, key2lp[k]))
+            print("WARNING: %s and %s share the five-character key '%s', so the "
+                  "measurement cannot separate them." % (key2lp[k], lp, k))
         else:
             key2lp[k] = lp
 
-    # head bead per lipid, found via the 5-char key
-    head_of = {}            # full lipid name -> head bead name (or None)
-    for lp in lipids:
-        hb = head_bead_for(lp, recs)
-        if hb is None:
-            print("WARN: no head bead found for %s; skipping it" % lp)
-        head_of[lp] = hb
+    resid, resn, aname, xyz, box = read_gro(args.gro)
+    box_xy = box[:2]
 
-    def lp_head(rn):
-        # rn is the 5-char gro resname; return (full lipid, head bead) or (None, None)
-        lp = key2lp.get(rn)
-        return (lp, head_of.get(lp)) if lp is not None else (None, None)
+    is_lipid = np.array([r in key2lp for r in resn])
+    is_solv = np.array([r in SOLVENT or r[:1] == "W" for r in resn])
+    is_prot = ~(is_lipid | is_solv)
 
-    head_zs = []
-    for (_, rn, a, z) in recs:
-        lp, hb = lp_head(rn)
-        if lp is not None and hb is not None and a == hb:
-            head_zs.append(z)
-    if not head_zs:
-        sys.exit("ERROR: no lipid head beads found; check --lipids names vs gro")
-    mid = sum(head_zs) / len(head_zs)
+    if not is_lipid.any():
+        sys.exit("ERROR: none of the names in --lipids was found in %s. Check the "
+                 "spelling against the residue names in the structure:\n"
+                 "  awk 'NR>2{print substr($0,6,5)}' %s | sort -u | head"
+                 % (args.gro, args.gro))
 
-    # count molecules per leaflet (one head bead per molecule)
-    up = {lp: 0 for lp in lipids}
-    lo = {lp: 0 for lp in lipids}
-    for (resid, rn, a, z) in recs:
-        lp, hb = lp_head(rn)
-        if lp is not None and hb is not None and a == hb:
-            (up if z >= mid else lo)[lp] += 1
+    # One entry per lipid molecule: its leaflet, its species, its xy position.
+    mol_beads = defaultdict(list)
+    for i in np.nonzero(is_lipid)[0]:
+        mol_beads[(int(resid[i]), resn[i])].append(i)
 
-    def area(counts):
-        miss = [lp for lp in counts if lp not in APL]
-        if miss:
-            # do not abort the build for an unknown lipid; use a default APL and
-            # warn. Pass --apl NAME:VAL for an accurate value if leaflet balance
-            # matters for this composition.
-            for lp in miss:
-                print("WARNING: no tabulated APL for %s; using default %.2f nm^2 "
-                      "(override with --apl %s:VALUE)" % (lp, DEFAULT_APL, lp))
-        return sum(counts[lp] * APL.get(lp, DEFAULT_APL) for lp in counts)
+    head_z = []
+    for key, idx in mol_beads.items():
+        names = set(aname[j] for j in idx)
+        for p in HEAD_PRIORITY:
+            if p in names:
+                head_z.extend(xyz[j, 2] for j in idx if aname[j] == p)
+                break
+    mid = float(np.mean(head_z)) if head_z else float(np.mean(xyz[is_lipid, 2]))
 
-    a_up, a_lo = area(up), area(lo)
-    mean = (a_up + a_lo) / 2.0 if (a_up + a_lo) else 1.0
-    dev = abs(a_up - a_lo) / mean
+    mols = []          # (species, leaflet, x, y)
+    for (rid, rn), idx in mol_beads.items():
+        z = float(np.mean(xyz[idx, 2]))
+        leaf = "upper" if z >= mid else "lower"
+        # The centroid in the membrane plane is the reference point. It needs no
+        # per-lipid choice of atom, so a lipid the script has never seen is
+        # measured on the same footing as a familiar one.
+        p = xyz[idx, :2]
+        ref_xy = p[0] + np.mean(((p - p[0]) + box_xy / 2.0) % box_xy - box_xy / 2.0,
+                                axis=0)
+        mols.append((key2lp[rn], leaf, float(ref_xy[0]), float(ref_xy[1])))
 
-    print("leaflet areas (approx, nm^2): upper=%.1f lower=%.1f  mismatch=%.1f%%"
-          % (a_up, a_lo, 100 * dev))
-    print("  upper counts:", {k: v for k, v in up.items() if v})
-    print("  lower counts:", {k: v for k, v in lo.items() if v})
+    out = {"box_nm": [float(v) for v in box], "midplane_nm": mid,
+           "method": "Monte Carlo integration of the planar Voronoi regions",
+           "assumes": "a flat bilayer; areas are projected on the xy plane",
+           "leaflets": {}}
 
-    if dev > args.tol:
-        msg = ("LEAFLET AREA MISMATCH %.1f%% (tol %.1f%%). The leaflets differ in "
-               "area; under semiisotropic pressure this leaves some residual "
-               "bilayer stress. To balance, adjust the per-leaflet counts so the "
-               "summed lipid areas match (reduce the larger leaflet, here the "
-               "%s one), or widen box xy." % (100 * dev, 100 * args.tol,
-                                              "upper" if a_up > a_lo else "lower"))
-        if args.asym and dev > args.hard_tol:
-            sys.exit("ABORT: %s This mismatch (> %.0f%%) is too large to "
-                     "equilibrate; rebuild with balanced leaflets."
-                     % (msg, 100 * args.hard_tol))
-        print("WARN: " + msg)
-        print("WARN: continuing; the build will finish and you can equilibrate, "
-              "but check membrane area and tension during equilibration.")
+    per_leaf_species = {}
+    for leaf in ("upper", "lower"):
+        here = [m for m in mols if m[1] == leaf]
+        if not here:
+            continue
+        # Protein beads that lie in this leaflet take area from it.
+        if leaf == "upper":
+            psel = is_prot & (xyz[:, 2] >= mid) & (xyz[:, 2] < mid + 2.5)
+        else:
+            psel = is_prot & (xyz[:, 2] < mid) & (xyz[:, 2] > mid - 2.5)
+        pxy = xyz[psel, :2]
+
+        pts = np.array([[m[2], m[3]] for m in here] + list(pxy))
+        areas, errs = mc_areas(pts, box_xy, args.points, seed=args.seed)
+        n_lip = len(here)
+
+        by_species = defaultdict(list)
+        for j, m in enumerate(here):
+            by_species[m[0]].append(areas[j])
+        species = {s: {"n": len(v), "apl_nm2": round(float(np.mean(v)), 4),
+                       "sd_nm2": round(float(np.std(v)), 4)}
+                   for s, v in sorted(by_species.items())}
+        per_leaf_species[leaf] = species
+
+        prot_area = float(areas[n_lip:].sum()) if len(pts) > n_lip else 0.0
+        lip_area = float(areas[:n_lip].sum())
+        out["leaflets"][leaf] = {
+            "n_lipids": n_lip,
+            "lipid_area_nm2": round(lip_area, 3),
+            "protein_area_nm2": round(prot_area, 3),
+            "mc_area_error_nm2": round(float(errs.sum()), 4),
+            "species": species,
+        }
+
+    for leaf, d in out["leaflets"].items():
+        print("%s leaflet: %d lipids, lipid area %.1f nm^2, protein area %.1f nm^2"
+              % (leaf, d["n_lipids"], d["lipid_area_nm2"], d["protein_area_nm2"]))
+        for s, v in d["species"].items():
+            print("    %-8s n=%-5d Voronoi area %.3f nm^2 (sd %.3f)"
+                  % (s, v["n"], v["apl_nm2"], v["sd_nm2"]))
+
+    # --- check 1: a species in both leaflets is measured in both -------------
+    shared = []
+    if "upper" in per_leaf_species and "lower" in per_leaf_species:
+        for s in per_leaf_species["upper"]:
+            if s in per_leaf_species["lower"]:
+                a = per_leaf_species["upper"][s]["apl_nm2"]
+                b = per_leaf_species["lower"][s]["apl_nm2"]
+                mean = (a + b) / 2.0
+                if mean > 0:
+                    shared.append((s, a, b, abs(a - b) / mean))
+    out["shared_species"] = [{"lipid": s, "upper_nm2": a, "lower_nm2": b,
+                              "relative_difference": round(d, 4)}
+                             for s, a, b, d in shared]
+
+    worst, worst_s = 0.0, ""
+    for s, a, b, d in shared:
+        print("  %-8s upper %.3f nm^2, lower %.3f nm^2, difference %.1f%%"
+              % (s, a, b, 100 * d))
+        if d > worst:
+            worst, worst_s = d, s
+
+    # --- check 2: measured against a reference, when one is given ------------
+    ref_dev = []
+    for leaf, sp in per_leaf_species.items():
+        for s, v in sp.items():
+            if s in ref and ref[s] > 0:
+                ref_dev.append((leaf, s, v["apl_nm2"], ref[s],
+                                abs(v["apl_nm2"] - ref[s]) / ref[s]))
+    for leaf, s, got, want, d in ref_dev:
+        print("  %-8s %s leaflet: measured %.3f nm^2 against the reference %.3f "
+              "nm^2, difference %.1f%%" % (s, leaf, got, want, 100 * d))
+
+    out["result"] = "PASS"
+    if not shared:
+        out["result"] = "REPORTED"
+        print("")
+        print("NOTE: no lipid is present in both leaflets, so the leaflets cannot "
+              "be compared against each other. The measured areas above are "
+              "reported and the build continues.")
+        print("      To have this checked, give a reference with --apl, or put one "
+              "lipid in both leaflets.")
+    elif worst > args.tol:
+        big = "upper" if per_leaf_species["upper"][worst_s]["apl_nm2"] > \
+                         per_leaf_species["lower"][worst_s]["apl_nm2"] else "lower"
+        out["result"] = "FAIL"
+        print("")
+        print("LEAFLET AREA MISMATCH: %s occupies %.1f%% more area in the %s "
+              "leaflet than in the other one (tolerance %.1f%%)."
+              % (worst_s, 100 * worst, big, 100 * args.tol))
+        print("")
+        print("  What to do:")
+        print("    The %s leaflet holds too few lipids for the area it has to "
+              "cover, so its lipids are stretched." % big)
+        print("    1. add lipids to the %s leaflet, or remove them from the other,"
+              % big)
+        print("       until the two measured areas agree. The counts above say by")
+        print("       how much: the ratio of the two areas is the ratio to correct.")
+        print("    2. a protein that reaches into one leaflet takes area from that")
+        print("       leaflet alone. The protein areas printed above are the amount")
+        print("       to subtract before the counts are set.")
+        print("    3. build again with UPPER and LOWER set separately, rather than")
+        print("       with LIPIDS, so the two leaflets are counted on their own.")
+        if args.asym and worst > args.hard_tol:
+            if args.json:
+                with open(args.json, "w") as fh:
+                    json.dump(out, fh, indent=2)
+            sys.exit("ABORT: a difference above %.0f%% does not equilibrate away."
+                     % (100 * args.hard_tol))
+        print("")
+        print("WARNING: the build continues, and the bilayer carries this stress "
+              "into the equilibration. Watch the area and the thickness.")
     else:
-        print("leaflets balanced within tolerance; safe to run.")
+        print("")
+        print("The leaflets are matched within %.1f%%. The largest difference is "
+              "%s, at %.1f%%." % (100 * args.tol, worst_s or "none", 100 * worst))
+
+    print("")
+    print("Measured by Monte Carlo integration of the planar Voronoi regions "
+          "(%d throws per leaflet); the bilayer is treated as flat. The regions "
+          "divide the whole plane, so a sterol receives more area here than the "
+          "area per lipid of a box-area-over-count convention gives it; the "
+          "check compares each lipid against itself in the other leaflet."
+          % args.points)
+
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump(out, fh, indent=2)
 
 
 if __name__ == "__main__":

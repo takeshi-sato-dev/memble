@@ -33,6 +33,11 @@
 #
 set -eo pipefail
 
+MEMBLE_VERSION=1.2.0
+case "${1:-}" in
+  -v|--version) echo "memble $MEMBLE_VERSION"; exit 0 ;;
+esac
+
 PEP_AA=${1:?usage: memble.sh <all_atom_protein.pdb>}
 M3_DIR=${M3_DIR:?set M3_DIR to the Martini 3 lipidome itp directory}
 GMX=${GMX:?set GMX to your GROMACS 2023 binary}
@@ -51,6 +56,8 @@ HELPER_FIXRESID=${HELPER_FIXRESID:-$(dirname "$HELPER_ITP2STRUCT")/fix_protein_r
 HELPER_WHOLE=${HELPER_WHOLE:-$(dirname "$HELPER_ITP2STRUCT")/make_protein_whole.py}
 HELPER_ZSHIFT=${HELPER_ZSHIFT:-$(dirname "$HELPER_ITP2STRUCT")/shift_protein_z.py}
 HELPER_MINDIST=${HELPER_MINDIST:-$(dirname "$HELPER_ITP2STRUCT")/check_min_distance.py}
+HELPER_VERIFY=${HELPER_VERIFY:-$(dirname "$HELPER_ITP2STRUCT")/verify_system.py}
+_HELPDIR=$(dirname "$HELPER_ITP2STRUCT")
 HELPER_GENSS=${HELPER_GENSS:-$(dirname "$HELPER_ITP2STRUCT")/gen_ss.py}
 PY=${PY:-python3}; MARTINIZE2=${MARTINIZE2:-martinize2}
 
@@ -106,9 +113,12 @@ PEP_AA=$(_abs "$PEP_AA")
 M3_DIR=$(_abs "$M3_DIR")
 [ -z "$PARTNER_PDB" ] || PARTNER_PDB=$(_abs "$PARTNER_PDB")
 case "$DSSP" in ""|mdtraj|/*) ;; */*) DSSP=$(_abs "$DSSP") ;; esac
-[ -f "$PEP_AA" ] || { echo "ERROR: protein PDB not found: $PEP_AA"; exit 1; }
-[ -d "$M3_DIR" ] || { echo "ERROR: M3_DIR is not a directory: $M3_DIR"; exit 1; }
-[ -z "$PARTNER_PDB" ] || [ -f "$PARTNER_PDB" ] || { echo "ERROR: PARTNER_PDB not found: $PARTNER_PDB"; exit 1; }
+[ -f "$PEP_AA" ] || stop "the protein PDB was not found: $PEP_AA" \
+  "Give the path to an all-atom PDB as the first argument:\n  memble.sh /path/to/protein.pdb\nA relative path is resolved against the directory you started memble in."
+[ -d "$M3_DIR" ] || stop "M3_DIR is not a directory: $M3_DIR" \
+  "M3_DIR points at the Martini 3 lipidome, the directory that holds the lipid\nitp files. Set it to the directory you unpacked the lipidome into:\n  export M3_DIR=/path/to/martini3-lipidome\n  ls \$M3_DIR/*.itp | head"
+[ -z "$PARTNER_PDB" ] || [ -f "$PARTNER_PDB" ] || stop "PARTNER_PDB was not found: $PARTNER_PDB" \
+  "PARTNER_PDB is the peripheral protein that memble places on one leaflet.\nGive the path to its all-atom PDB, or unset PARTNER_PDB to build the membrane\nprotein alone."
 
 WORK=$(pwd)/${OUTTAG}_work
 rm -rf "$WORK"                     # start clean: remove any previous build output
@@ -116,6 +126,43 @@ mkdir -p "$WORK"; cd "$WORK"; cp "$PEP_AA" input_aa.pdb
 
 # --- parse composition (symmetric or asymmetric) ---
 sed_inplace(){ local e=$1; shift; local f; for f in "$@"; do sed "$e" "$f" > "$f.__si__" && mv "$f.__si__" "$f"; done; }
+
+# must <what this step does> <what to do about it> -- <command...>
+# A step that changes the system stops the build when it fails, and it says what
+# to do next. A step that only writes a viewer file keeps "|| true". The
+# distinction matters because a system whose vsites, water, ions or residue
+# numbers were never fixed still starts, still minimises, and still returns
+# numbers that look ordinary.
+must(){
+  local what=$1 remedy=$2; shift 2
+  [ "$1" = "--" ] && shift
+  if ! "$@"; then
+    stop "$what failed." "$remedy" "$*"
+    MEMBLE_DEGRADED="${MEMBLE_DEGRADED}${MEMBLE_DEGRADED:+; }$what"
+    export MEMBLE_DEGRADED
+  fi
+}
+
+# stop <what happened> <what to do> [<command that failed>]
+# Every exit of memble goes through here, so every stop carries a remedy.
+stop(){
+  local what=$1 remedy=$2 cmd=${3:-}
+  echo "" >&2
+  echo "ERROR: $what" >&2
+  [ -z "$cmd" ] || echo "  command: $cmd" >&2
+  echo "" >&2
+  echo "  What to do:" >&2
+  printf '%b\n' "$remedy" | while IFS= read -r line; do echo "    $line" >&2; done
+  echo "" >&2
+  if [ "${MEMBLE_IGNORE_ERRORS:-0}" = "1" ]; then
+    echo "  MEMBLE_IGNORE_ERRORS=1 is set. memble continues with a system that" >&2
+    echo "  did not pass this step, and records the step in memble_build.json." >&2
+    return 0
+  fi
+  echo "  Nothing was deleted. The working directory holds the files as they" >&2
+  echo "  stood when the step failed, so the state can be inspected." >&2
+  exit 1
+}
 parse_into(){ local tok nm ra hd
   for tok in $1; do IFS=: read -r nm ra hd <<<"$tok"
     eval "$2+=(\"\$nm\")"; eval "$3+=(\"\${ra:-1}\")"; eval "$4+=(\"\${hd:-auto}\")"
@@ -152,13 +199,15 @@ if [ -z "$DSSP" ]; then
     "$PY" -c 'import mdtraj' 2>/dev/null && DSSP=mdtraj || DSSP=""
   fi
 fi
-[ "$SS_MODE" = tm ] || [ -n "$DSSP" ] || [ -n "$SS_OVERRIDE" ] || { echo "ERROR: no usable DSSP (4.x is not compatible). Install DSSP 3.x and set DSSP=, or use SS_MODE=tm, or set SS_OVERRIDE."; exit 1; }
+[ "$SS_MODE" = tm ] || [ -n "$DSSP" ] || [ -n "$SS_OVERRIDE" ] || stop "no usable DSSP was found (DSSP 4.x is not compatible)" \
+  "The secondary structure assignment sets the backbone bonded parameters, and\nMartini holds it for the whole run, so memble needs one. Three routes:\n  1. install DSSP 3.x and point at it:   export DSSP=/path/to/mkdssp\n  2. install mdtraj:                     pip install mdtraj\n  3. assign the transmembrane range by hand, with no DSSP at all:\n       export SS_MODE=tm TM_RANGE=619:641\n  4. give the whole string yourself:     export SS_OVERRIDE=CCCHHHH..."
 pick_itp(){ ls $1 2>/dev/null | head -1; }
 M3_CORE_ITP=${M3_CORE_ITP:-$(pick_itp "$M3_DIR/martini_v3.0.0.itp")}
 M3_SOLV_ITP=${M3_SOLV_ITP:-$(pick_itp "$M3_DIR/*solvent*.itp")}
 M3_ION_ITP=${M3_ION_ITP:-$(pick_itp "$M3_DIR/*ion*.itp")}
 M3_FFBONDED_ITP=${M3_FFBONDED_ITP:-$(pick_itp "$M3_DIR/*ffbonded*.itp")}   # v2 lipids only; optional
-for v in M3_CORE_ITP M3_SOLV_ITP M3_ION_ITP; do [ -n "${!v}" ] || { echo "ERROR: locate $v in $M3_DIR"; exit 1; }; done
+for v in M3_CORE_ITP M3_SOLV_ITP M3_ION_ITP; do [ -n "${!v}" ] || stop "$v was not found under $M3_DIR" \
+  "memble looks for the Martini 3 core, solvent and ion itp files in M3_DIR.\nCheck what is there:\n  ls \$M3_DIR/*.itp\nIf the files sit under a different name, set the variable directly, for example\n  export M3_SOLV_ITP=\$M3_DIR/martini_v3.0.0_solvents_v1.itp"; done
 
 # --- route each lipid to the itp that defines it ---
 find_itp_for_mol(){ local m=$1 f; for f in "$M3_DIR"/*.itp; do
@@ -167,7 +216,8 @@ UNIQ_SRC=()
 in_list(){ local x=$1; shift; case " $* " in *" $x "*) return 0;; *) return 1;; esac; }
 local_for(){ echo "local_$(basename "$1")"; }
 for nm in "${ALL[@]}"; do
-  src=$(find_itp_for_mol "$nm") || { echo "ERROR: lipid '$nm' not in any itp under $M3_DIR (not in your M3 lipidome?)"; exit 1; }
+  src=$(find_itp_for_mol "$nm") || stop "the lipid '$nm' is in no itp under $M3_DIR" \
+  "Every lipid named in LIPIDS, UPPER or LOWER needs a Martini 3 topology.\nCheck the spelling against what the lipidome holds:\n  grep -h moleculetype -A2 \$M3_DIR/*.itp | grep -i $nm\nA lipid that exists only as a published itp is used by copying that itp into\nM3_DIR; COBY imports its structure from the topology."
   in_list "$src" "${UNIQ_SRC[@]}" || UNIQ_SRC+=("$src")
 done
 
@@ -175,8 +225,10 @@ done
 # 1. orient TM along z
 # ====================================================================
 if [ "$PREBUILT_MULTI" = 1 ]; then
-  [ -n "$HELPER_PRE" ] || { echo "ERROR: PREBUILT_MULTI=1 needs HELPER_PRE=/path/prebuild_orient.py"; exit 1; }
-  [ -n "$RES_KEEP" ]   || { echo "ERROR: PREBUILT_MULTI=1 needs RES_KEEP (e.g. 'A:54-103;B:54-103')"; exit 1; }
+  [ -n "$HELPER_PRE" ] || stop "PREBUILT_MULTI=1 needs HELPER_PRE" \
+  "Point HELPER_PRE at prebuild_orient.py in the memble directory:\n  export HELPER_PRE=/path/to/memble/prebuild_orient.py\nsetup.sh sets every HELPER_ variable at once; source it instead of setting them\none at a time."
+  [ -n "$RES_KEEP" ]   || stop "PREBUILT_MULTI=1 needs RES_KEEP" \
+  "RES_KEEP names the residues to keep from a prebuilt multimer, one range per\nchain, for example\n  export RES_KEEP='A:54-103;B:54-103'\nThe chain letters are the ones in the input PDB."
   PRE=(--in input_aa.pdb --out oriented_aa.pdb --keep "$RES_KEEP"); [ -n "$TM_CORE" ] && PRE+=(--core "$TM_CORE")
   "$PY" "$HELPER_PRE" "${PRE[@]}"
 else
@@ -192,7 +244,8 @@ else
     else
       ORI_SS=$("$PY" "$HELPER_SSDSSP" --pdb input_aa.pdb --dssp "$DSSP" 2>/dev/null) || ORI_SS=""
     fi
-    [ -n "$ORI_SS" ] || { echo "ERROR: MULTI_TM=1 needs a secondary-structure string; set SS_OVERRIDE or provide a working DSSP"; exit 1; }
+    [ -n "$ORI_SS" ] || stop "MULTI_TM=1 needs a secondary structure string and DSSP returned none" \
+  "MULTI_TM=1 orients a multi-pass protein on its helix bundle, so it needs to\nknow which residues are helical. Either\n  export SS_OVERRIDE=CCCHHHHH...    (one character per residue)\nor install a working DSSP (3.x) or mdtraj and try again."
     ORI+=(--multi-tm --ss "$ORI_SS")
     [ -n "$MULTI_TM_MINLEN" ] && ORI+=(--multi-tm-minlen "$MULTI_TM_MINLEN")
     [ -n "$NTERM_SIDE" ] && ORI+=(--nterm-side "$NTERM_SIDE")
@@ -216,23 +269,54 @@ elif [ "$SS_MODE" = tm ]; then
   # command line, so ALL:$TM_RANGE would hand it "ALL:65:88" and it would
   # reject the range. Convert the separator instead of failing.
   SS_TM=${TM_CORE:-}; [ -n "$SS_TM" ] || { [ -n "$TM_RANGE" ] && SS_TM="ALL:${TM_RANGE/:/-}"; }
-  [ -n "$SS_TM" ] || { echo "ERROR: SS_MODE=tm needs TM_RANGE (e.g. '65:88') or TM_CORE (e.g. 'A:65-88;B:65-88')"; exit 1; }
-  SS_STR=$("$PY" "$HELPER_GENSS" --pdb oriented_aa.pdb --tm "$SS_TM") || { echo "ERROR: SS generation failed"; exit 1; }
-  [ -n "$SS_STR" ] || { echo "ERROR: SS_MODE=tm produced an empty SS string"; exit 1; }
+  [ -n "$SS_TM" ] || stop "SS_MODE=tm needs a transmembrane range" \
+  "Give the residue numbers of the transmembrane helix, in the numbering of the\ninput PDB:\n  export TM_RANGE=619:641                 (one chain)\n  export TM_CORE='A:619-641;B:619-641'    (several chains)\nTM_RANGE uses a colon, TM_CORE uses a hyphen inside each chain."
+  SS_STR=$("$PY" "$HELPER_GENSS" --pdb oriented_aa.pdb --tm "$SS_TM") || stop "the secondary structure string could not be generated from $SS_TM" \
+  "gen_ss.py wants CHAIN:start-end. Check that the residue numbers exist in the\ninput PDB and that the chain letter matches:\n  grep '^ATOM' oriented_aa.pdb | cut -c22-26 | sort -un | head\n  grep '^ATOM' oriented_aa.pdb | cut -c22 | sort -u"
+  [ -n "$SS_STR" ] || stop "SS_MODE=tm produced an empty secondary structure string" \
+  "No residue matched the range $SS_TM. Check the residue numbering of the input\nPDB, which memble does not renumber:\n  grep '^ATOM' oriented_aa.pdb | cut -c22-26 | sort -un | head"
   echo ">>> SS_MODE=tm: TM=$SS_TM -> SS length ${#SS_STR} (TM helix, rest coil)"
   MZ+=(-ss "$SS_STR")
-elif [ "$DSSP" = mdtraj ]; then
-  MZ+=(-dssp)
+elif [ "$SS_MODE" = dssp-internal ]; then
+  # Old behaviour, kept as an escape hatch: martinize2 runs DSSP itself and the
+  # string it used is never written down. A build made this way cannot be
+  # repeated from the output alone, and verify_system.py reports that.
+  echo ">>> SS_MODE=dssp-internal: martinize2 runs DSSP; the assignment is not recorded"
+  if [ "$DSSP" = mdtraj ]; then MZ+=(-dssp); else MZ+=(-dssp "$DSSP"); fi
 else
-  MZ+=(-dssp "$DSSP")
+  # Default: run DSSP here, keep the string, and hand it to martinize2. The
+  # assignment sets the backbone bonded parameters and Martini holds it for the
+  # whole run, so the string belongs in the output next to the composition.
+  if [ "$DSSP" = mdtraj ] || [ -z "$DSSP" ]; then
+    SS_STR=$("$PY" "$HELPER_SSDSSP" --pdb oriented_aa.pdb) \
+      || stop "DSSP failed on oriented_aa.pdb" \
+        "memble runs DSSP itself so that the assignment is recorded. Three ways on:\n  1. install one:            pip install mdtraj      (or install DSSP 3.x)\n  2. assign by hand:         export SS_MODE=tm TM_RANGE=619:641\n  3. give the whole string:  export SS_OVERRIDE=CCCHHHH...\nTo let martinize2 run DSSP the old way, without recording the string:\n  export SS_MODE=dssp-internal"
+  else
+    SS_STR=$("$PY" "$HELPER_SSDSSP" --pdb oriented_aa.pdb --dssp "$DSSP") \
+      || stop "DSSP ($DSSP) failed on oriented_aa.pdb" \
+        "Check that the binary runs and is version 3.x; 4.x writes a different format:\n  \$DSSP --version\nOtherwise assign the transmembrane range by hand, with no DSSP at all:\n  export SS_MODE=tm TM_RANGE=619:641"
+  fi
+  [ -n "$SS_STR" ] || stop "DSSP returned an empty secondary structure string" \
+  "DSSP ran and assigned nothing, so it read no protein residue in oriented_aa.pdb.\nCheck that the file holds ATOM records with backbone atoms:\n  grep -c '^ATOM' oriented_aa.pdb\n  grep '^ATOM' oriented_aa.pdb | cut -c13-16 | sort -u | head"
+  echo ">>> SS_MODE=dssp: SS length ${#SS_STR}, helical residues $(printf '%s' "$SS_STR" | tr -cd 'H' | wc -c | tr -d ' ')"
+  MZ+=(-ss "$SS_STR")
 fi
+# Record the assignment that martinize2 actually received, whatever produced it.
+SS_USED=""; SS_SOURCE=""
+if [ -n "$SS_OVERRIDE" ]; then SS_USED="$SS_OVERRIDE"; SS_SOURCE="override"
+elif [ "$SS_MODE" = tm ]; then SS_USED="$SS_STR"; SS_SOURCE="tm"
+elif [ "$SS_MODE" = dssp-internal ]; then SS_USED=""; SS_SOURCE="dssp-internal"
+else SS_USED="$SS_STR"; SS_SOURCE="dssp"
+fi
+export SS_USED SS_SOURCE
 [ "$WATER_BIAS" -eq 1 ] && MZ+=(-water-bias -water-bias-eps E:-0.5 C:1.0 H:-1.0)
 "$MARTINIZE2" "${MZ[@]}"
 res_count_itp(){ awk '/^\[/{a=($2=="atoms")?1:0;next} a&&NF>0&&$1!~/^;/{print $3}' "$1" | sort -un | wc -l | tr -d ' '; }
 if [ "$PREBUILT_MULTI" = 1 ]; then
   PROT_ITPS=(molecule_*.itp)
   PROT_MOLMAP=$(awk '/\[ *molecules *\]/{m=1;next} m&&/^\[/{m=0} m&&NF&&$1!~/^;/{printf (n++?":":"") $1} END{printf "\n"}' protein_only.top)
-  [ -n "$PROT_MOLMAP" ] || { echo "ERROR: could not read [molecules] from protein_only.top"; exit 1; }
+  [ -n "$PROT_MOLMAP" ] || stop "the [ molecules ] section of protein_only.top could not be read" \
+  "martinize2 wrote protein_only.top and memble found no molecule in it, so the\ncoarse-graining produced nothing. Read the martinize2 output above for the\nreason, and check the input:\n  head -30 protein_only.top\nA PDB with alternate locations or with no CA atoms is the usual cause."
   PROT_BLOCKS=""; for mt in $(echo "$PROT_MOLMAP" | tr ':' ' '); do PROT_BLOCKS="$PROT_BLOCKS $(res_count_itp "${mt}.itp")"; done
   NCHAINS=$(echo "$PROT_MOLMAP" | tr ':' '\n' | grep -c .)
   echo ">>> PREBUILT_MULTI: chains=$NCHAINS molmap=$PROT_MOLMAP blocks=[$PROT_BLOCKS ] itps=${PROT_ITPS[*]}"
@@ -291,7 +375,8 @@ declare -a PART_NAMES=() PART_ITPS=() PART_COUNTS=()
 # files; placement + box growth + restraints happen further down.
 PARTNER_CG=""; PARTNER_NAME=""; PARTNER_ITP=""
 if [ -n "$PARTNER_PDB" ]; then
-  [ -n "$HELPER_PART" ] || { echo "ERROR: PARTNER_PDB set but HELPER_PART not given"; exit 1; }
+  [ -n "$HELPER_PART" ] || stop "PARTNER_PDB is set and HELPER_PART is not" \
+  "Point HELPER_PART at place_partner.py in the memble directory:\n  export HELPER_PART=/path/to/memble/place_partner.py\nsetup.sh sets every HELPER_ variable at once."
   pd=partner_cg; mkdir -p "$pd"
   "$MARTINIZE2" -ff martini3001 -f "$PARTNER_PDB" -x "$pd/cg.pdb" -o "$pd/top.top" \
       -elastic -p backbone -cys auto -maxwarn 10
@@ -410,7 +495,9 @@ COBY.COBY(
 )
 print("COBY build done")
 PYEOF
-sed_inplace 's/NA+/NA /g; s/CL-/CL /g' system.gro system.top || true
+must "renaming the ion beads to the Martini names" \
+  "COBY wrote NA+ and CL-, and the Martini itp files call them NA and CL.\nsed could not write system.gro or system.top.\nCheck that the output directory is writable and that the disk is not full." -- \
+  sed_inplace 's/NA+/NA /g; s/CL-/CL /g' system.gro system.top
 
 # Optional fine tuning of how deep the protein sits in the membrane. Z_SHIFT
 # (nm, default 0) moves only the protein beads in z, found by trying a few
@@ -419,7 +506,9 @@ sed_inplace 's/NA+/NA /g; s/CL-/CL /g' system.gro system.top || true
 # coordinates, so the offset is held through equilibration.
 if [ "${Z_SHIFT:-0}" != "0" ] && [ "${Z_SHIFT:-0}" != "0.0" ]; then
   echo ">>> shifting the protein in z by Z_SHIFT=${Z_SHIFT} nm"
-  "$PY" "$HELPER_ZSHIFT" --gro system.gro --dz "$Z_SHIFT" || true
+  must "shifting the protein in z by Z_SHIFT=${Z_SHIFT} nm" \
+  "Z_SHIFT moves only the protein beads in z.\nCheck that Z_SHIFT is a number in nm, for example Z_SHIFT=0.4 or Z_SHIFT=-0.4.\nSet Z_SHIFT=0 to skip the shift and place the protein where COBY put it." -- \
+    "$PY" "$HELPER_ZSHIFT" --gro system.gro --dz "$Z_SHIFT"
 fi
 
 # ====================================================================
@@ -431,8 +520,12 @@ fi
 # virtual sites (sterol ROH/R3, funct 4) flat; GROMACS then reconstructs them
 # ~0.1 nm away and they can explode at minimisation. Rebuild every vsite exactly
 # from its itp definition before declashing/minimising.
-"$PY" "$HELPER_FIXVS" --gro system.gro --top system.top --itp-dir "$M3_DIR" || true
-"$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target 0.21 --iters 200 --exclude-beads "ROH R3" || true
+must "rebuilding the sterol virtual sites from their itp definitions" \
+  "COBY leaves out-of-plane virtual sites (sterol ROH and R3, funct 4) flat, and\nGROMACS rebuilds them about 0.1 nm away, which explodes at minimisation.\nCheck that M3_DIR points at the Martini 3 lipidome directory and that it holds\nthe itp of every sterol in the composition:  ls $M3_DIR/*.itp | grep -i chol\nA composition without a sterol does not need this step; remove the sterol or\nadd its itp to M3_DIR." -- \
+  "$PY" "$HELPER_FIXVS" --gro system.gro --top system.top --itp-dir "$M3_DIR"
+must "separating overlapping beads left by the packing" \
+  "The packing left two beads of different molecules on top of each other.\nRaise BOX_X and BOX_Y by 1 nm and build again, which gives the packing room.\nOr lower the lipid density with a larger COBY_APL.\nTo keep the system and look at it, set MEMBLE_ALLOW_OVERLAP=1." -- \
+  "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target 0.21 --iters 200 --exclude-beads "ROH R3"
 
 # ====================================================================
 # 4b. ADD WATER: COBY builds the membrane in a thin box (a large box_z hangs its
@@ -448,8 +541,10 @@ if [ -n "$PARTNER_CG" ]; then
       --water-nm "$PARTNER_WATER" --lipids "${ALL[*]}" \
       --rotate "$PARTNER_ROTATE" --seed "$SEED"
   if [ -n "$HELPER_ADDWATER" ]; then
-    "$PY" "$HELPER_ADDWATER" --gro system.gro --top system.top \
-        --water-nm "$PARTNER_WATER" --salt "$SALT_M" --keep-box || true
+    must "adding water and ions around the peripheral protein" \
+  "The peripheral protein was placed, and the solvation of the new box failed.\nCheck PARTNER_WATER (nm, for example 2.5) and SALT_M (molar, for example 0.15).\nCheck that the Martini water itp is in M3_DIR:  ls $M3_DIR | grep -i water" -- \
+      "$PY" "$HELPER_ADDWATER" --gro system.gro --top system.top \
+        --water-nm "$PARTNER_WATER" --salt "$SALT_M" --keep-box
   fi
 elif [ -n "$HELPER_ADDWATER" ]; then
   # Make the protein contiguous BEFORE sizing the box. add_water derives
@@ -461,10 +556,14 @@ elif [ -n "$HELPER_ADDWATER" ]; then
   # The call after the solvation step below stays: it re-centres in the final
   # box and reports the resulting water cushion.
   if [ -n "$HELPER_WHOLE" ] && [ -f "$HELPER_WHOLE" ]; then
-    "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir . >/dev/null 2>&1 || true
+    must "making the protein contiguous before the box is sized" \
+  "add_water measures the z span of the protein to size the box. While a chain is\nstill split across the z boundary that span is the wrapped one, which is far\nshorter than the protein, and the box comes out too short.\nCheck that the itp files of the protein are in the working directory:  ls molecule_*.itp\nIf the protein has one chain and does not cross the boundary, this step can be\nskipped with HELPER_WHOLE= (empty)." -- \
+      "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir .
   fi
-  "$PY" "$HELPER_ADDWATER" --gro system.gro --top system.top \
-      --water-nm "$WATER_NM" --salt "$SALT_M" || true
+  must "sizing the box and adding water and ions" \
+  "Check WATER_NM (nm per side, for example 2.5) and SALT_M (molar, for example 0.15).\nCheck that the Martini water and ion itp files are in M3_DIR.\nA very tall protein in a small xy box can leave no room for water; raise BOX_X\nand BOX_Y, or lower WATER_NM." -- \
+    "$PY" "$HELPER_ADDWATER" --gro system.gro --top system.top \
+      --water-nm "$WATER_NM" --salt "$SALT_M"
 fi
 
 # final PBC-aware declash: catches any bead sitting just outside the box that
@@ -477,34 +576,48 @@ fi
 # force). Recentering can push some lipids/water across the edge, so the final
 # declash must run AFTER this, as the last coordinate step, to clean up.
 if [ -n "$HELPER_WHOLE" ] && [ -f "$HELPER_WHOLE" ]; then
-  "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir . || true
+  must "making the protein contiguous in the final box" \
+  "Recentring can split a chain across the box edge, and two consecutive backbone\nbeads a full box apart give an infinite force at minimisation.\nCheck that the protein itp files are in the working directory:  ls molecule_*.itp" -- \
+    "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir .
 fi
 
 # FINAL declash and the last coordinate-modifying step: guarantees no two beads
 # from different molecules overlap. The protein is frozen (never moved), so it
 # is not distorted or re-split; only solvent and lipids are pushed apart.
-"$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target 0.21 --iters 200 --exclude-beads "ROH R3" --freeze-protein || true
+must "the final separation of overlapping beads" \
+  "Recentring pushed some lipids or water across the box edge and they now overlap.\nRaise BOX_X and BOX_Y by 1 nm and build again.\nTo keep the system and look at it, set MEMBLE_ALLOW_OVERLAP=1." -- \
+  "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target 0.21 --iters 200 --exclude-beads "ROH R3" --freeze-protein
 
-# Confirm there is no residual overlap that would give an infinite force, so a
-# broken system is never shipped (the user sees this before running gmx).
+# Confirm there is no residual overlap that would give an infinite force. A
+# warning here was read past and the build shipped, so this now stops the build.
+# MEMBLE_ALLOW_OVERLAP=1 keeps the old behaviour for a system that is being
+# inspected rather than run.
 if [ -n "$HELPER_MINDIST" ] && [ -f "$HELPER_MINDIST" ]; then
-  "$PY" "$HELPER_MINDIST" --gro system.gro --lipids "${ALL[*]}" --min 0.12 || \
-    echo ">>> WARNING: residual overlap detected; see message above."
+  if ! "$PY" "$HELPER_MINDIST" --gro system.gro --lipids "${ALL[*]}" --min 0.12; then
+    if [ "${MEMBLE_ALLOW_OVERLAP:-0}" = "1" ]; then
+      echo ">>> MEMBLE_ALLOW_OVERLAP=1: continuing with a residual overlap."
+    else
+      stop "beads of different molecules are closer than 0.12 nm" \
+        "Minimisation of this system reports an infinite force, or it moves the two\nmolecules far enough apart to distort them. The pair is named just above.\n  1. give the packing room:   raise BOX_X and BOX_Y by 1 nm\n  2. lower the lipid density: raise COBY_APL\n  3. if the pair involves the protein, raise SPACING_NM or lower N_COPY\n  4. to keep this system and look at it:  export MEMBLE_ALLOW_OVERLAP=1"
+    fi
+  fi
 fi
 
 # Restore the protein's original per-chain residue numbers (martinize renumbers
 # every chain from 1, so the assembled chains overlap). The true numbers come
 # from oriented_aa.pdb (which preserves the input PDB resSeq); nothing hardcoded.
 if [ -f oriented_aa.pdb ] && [ -n "$HELPER_FIXRESID" ]; then
-  "$PY" "$HELPER_FIXRESID" --gro system.gro --oriented oriented_aa.pdb \
-        --top system.top --itp-dir . || true
+  must "restoring the per-chain residue numbers of the input PDB" \
+  "martinize2 renumbers every chain from 1, so the chains of a multi-chain protein\noverlap. The true numbers come from oriented_aa.pdb.\nCheck that oriented_aa.pdb exists and holds the input residue numbers.\nThe system is correct without this step; only the numbering in system.gro is\nmartinize2 numbering. Set HELPER_FIXRESID= (empty) to accept that." -- \
+    "$PY" "$HELPER_FIXRESID" --gro system.gro --oriented oriented_aa.pdb \
+        --top system.top --itp-dir .
 fi
 
 # ====================================================================
 # 4b. LEAFLET AREA PRE-CHECK (before any gmx MD; abort the build if asymmetric
 #     leaflets are area-mismatched, so it is fixed now, not after a melted run)
 # ====================================================================
-"$PY" "$HELPER_AREA" --gro system.gro --lipids "${ALL[*]}" --asym "$ASYM" --tol "$AREA_TOL" --hard-tol "$AREA_HARD_TOL" ${APL_OVERRIDE:+--apl "$APL_OVERRIDE"}
+"$PY" "$HELPER_AREA" --gro system.gro --lipids "${ALL[*]}" --asym "$ASYM" --tol "$AREA_TOL" --hard-tol "$AREA_HARD_TOL" --json leaflet_area.json ${APL_OVERRIDE:+--apl "$APL_OVERRIDE"}
 
 # ====================================================================
 # 5. per-lipid bead-count sanity assert
@@ -519,7 +632,8 @@ for nm in "${ALL[@]}"; do src=$(find_itp_for_mol "$nm")
     sec=="atoms" && inmol && NF && $1!~/^;/ {n++}
     END{print n+0}' "$src")
   echo ">>> $nm beads gro=$bg itp=$bi"
-  [ "$bg" -eq "$bi" ] && [ "$bg" -ne 0 ] || { echo "ASSERT FAILED for $nm"; exit 1; }
+  [ "$bg" -eq "$bi" ] && [ "$bg" -ne 0 ] || stop "the lipid $nm has $bg beads in system.gro and $bi beads in its topology" \
+  "The structure that COBY placed and the itp that the topology includes describe\ndifferent molecules, so GROMACS would read the wrong beads.\nUsually two itp files in M3_DIR define the same moleculetype with different bead\ncounts. Find them:\n  grep -l \"^ *$nm \" \$M3_DIR/*.itp\nKeep one and move the other out of M3_DIR."
 done
 
 # ====================================================================
@@ -717,6 +831,64 @@ if [ -n "$PARTNER_NAME" ] && [ -n "$HELPER_PARTPULL" ]; then
       --mdp step7_production.mdp --partner-name "$PARTNER_NAME" \
       --lipids "${ALL[*]}" --margin "$PARTNER_MARGIN" --k "$PARTNER_K"
 fi
+# ====================================================================
+# 5b. BUILD RECORD
+#     One file that says what this system is and how it was made, so the
+#     directory alone answers the question six months later.
+# ====================================================================
+{
+  printf '{\n'
+  printf '  "memble_version": "%s",\n' "$MEMBLE_VERSION"
+  printf '  "built_utc": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '  "input_pdb": "%s",\n' "$PEP_AA"
+  printf '  "input_pdb_sha256": "%s",\n' "$( { sha256sum "$PEP_AA" 2>/dev/null || shasum -a 256 "$PEP_AA" 2>/dev/null; } | awk '{print $1}')"
+  printf '  "ss_source": "%s",\n' "$SS_SOURCE"
+  printf '  "ss_string": "%s",\n' "$SS_USED"
+  printf '  "tm_range": "%s",\n' "$TM_RANGE"
+  printf '  "tm_core": "%s",\n' "${TM_CORE:-}"
+  printf '  "n_copy": "%s",\n' "$N_COPY"
+  printf '  "lipids": "%s",\n' "$LIPIDS"
+  printf '  "upper": "%s",\n' "${UPPER:-}"
+  printf '  "lower": "%s",\n' "${LOWER:-}"
+  printf '  "box_x_nm": "%s",\n' "${BOX_X:-}"
+  printf '  "box_y_nm": "%s",\n' "${BOX_Y:-}"
+  printf '  "water_nm": "%s",\n' "$WATER_NM"
+  printf '  "salt_M": "%s",\n' "$SALT_M"
+  printf '  "temperature_K": "%s",\n' "$TEMP"
+  printf '  "m3_dir": "%s",\n' "$M3_DIR"
+  printf '  "gromacs": "%s",\n' "$("$GMX" --version 2>/dev/null | awk -F': *' '/GROMACS version/{print $2; exit}')"
+  printf '  "martinize2": "%s",\n' "$("$MARTINIZE2" --version 2>&1 | head -1 | tr -d '"')"
+  printf '  "coby": "%s",\n' "$("$PY" -c 'import COBY;print(getattr(COBY,"__version__","unknown"))' 2>/dev/null)"
+  printf '  "degraded_steps": "%s"\n' "${MEMBLE_DEGRADED:-}"
+  printf '}\n'
+} > memble_build.json
+echo ">>> build record written to memble_build.json"
+
+# ====================================================================
+# 6. VERIFICATION GATE
+#    Every post-condition that a broken system still survives is measured here.
+#    memble writes run.sh only after the gate passes, so a build that did not
+#    pass is never handed over as one that is ready to run.
+# ====================================================================
+if [ -f "$HELPER_VERIFY" ]; then
+  VERIFY=(--gro system.gro --top system.top --itp-dir "$M3_DIR" --itp-dir .
+          --lipids "${ALL[*]}" --water-nm "$WATER_NM"
+          --ss-mode "$SS_SOURCE" --meta memble_build.json)
+  [ -n "$SS_USED" ]  && VERIFY+=(--ss-string "$SS_USED")
+  [ -n "$TM_RANGE" ] && VERIFY+=(--tm-resids "$TM_RANGE")
+  [ -n "$UPPER" ]    && VERIFY+=(--expect-upper "$UPPER")
+  [ -n "$LOWER" ]    && VERIFY+=(--expect-lower "$LOWER")
+  if [ -z "$UPPER$LOWER" ] && [ -n "$LIPIDS" ]; then
+    VERIFY+=(--expect-upper "$LIPIDS" --expect-lower "$LIPIDS")
+  fi
+  for c in ${MEMBLE_ALLOW:-}; do VERIFY+=(--allow "$c"); done
+  if ! "$PY" "$HELPER_VERIFY" "${VERIFY[@]}"; then
+    stop "the finished system did not pass verification" \
+      "Every check that failed is printed above and in memble_report.txt, and each\none carries what to do about it. system.gro and system.top are kept so the\nsystem can be looked at; run.sh was not written, so nothing runs by accident.\nTo accept one named check and continue:\n  export MEMBLE_ALLOW=\"water_layer overlap\""
+  fi
+  echo ">>> verification passed; memble_report.txt and memble_report.json written"
+fi
+
 cat > run.sh <<RUNEOF
 #!/usr/bin/env bash
 set -eo pipefail
@@ -738,6 +910,21 @@ for k in 1 2 3 4 5 6; do
   check_blowup step6.\${k}
   prev=step6.\${k}
 done
+# The last equilibration stage is read before the production run starts. A
+# membrane whose area is still drifting is not equilibrated, whatever the length
+# of the stage was, and the production run inherits the drift.
+if [ -f "$_HELPDIR/check_equilibration.py" ]; then
+  if ! "$PY" "$_HELPDIR/check_equilibration.py" --edr \${prev}.edr --gmx "\$GMX" \
+        --json equilibration.json; then
+    if [ "\${MEMBLE_ALLOW_DRIFT:-0}" = "1" ]; then
+      echo ">>> MEMBLE_ALLOW_DRIFT=1: starting the production run anyway."
+    else
+      echo "The production run was not started. Extend \${prev} and read it again," >&2
+      echo "or set MEMBLE_ALLOW_DRIFT=1 to start regardless." >&2
+      exit 1
+    fi
+  fi
+fi
 \$GMX grompp -f step7_production.mdp -c \${prev}.gro -p system.top -n index.ndx -o step7.tpr -maxwarn 10
 \$GMX mdrun -deffnm step7 -v
 check_blowup step7
@@ -746,10 +933,12 @@ RUNEOF
 chmod +x run.sh
 # also drop the staged, stop-on-failure MD runner (CHARMM-GUI style: one stage at
 # a time with a success check) next to the system, copied from the helper folder.
-_HELPDIR=$(dirname "$HELPER_ITP2STRUCT")
 if [ -f "$_HELPDIR/run_md.sh" ]; then
   cp "$_HELPDIR/run_md.sh" run_md.sh && chmod +x run_md.sh
 fi
+for _h in check_equilibration.py leaflet_area_check.py verify_system.py; do
+  if [ -f "$_HELPDIR/$_h" ] && [ ! -f "./$_h" ]; then cp "$_HELPDIR/$_h" "./$_h"; fi
+done
 # Connectivity for viewers, CHARMM-GUI style: write a PSF with real bonds from
 # the topology (ParmEd drops Martini bonds), then load system.psf and read
 # system.gro or a trajectory on top of it; bonds show on every frame.
