@@ -118,14 +118,24 @@ def main():
         print("check_min_distance: smallest intra-molecular contact  = %.3f nm "
               "between %s %d %s and %s"
               % (intra_best, resn[ii], resid[ii], aname[ii], aname[jj]))
-    worst = min(best, intra_best)
-    if worst < args.min:
-        print("check_min_distance: WARNING below %.2f nm -- minimisation may see "
-              "a very large force here" % args.min)
+    # The exit code follows the INTER-molecular distance alone. Beads of one
+    # molecule sit as close as their own bonded parameters put them: the sterol
+    # ring of Martini 3 holds two beads about 0.1 nm apart by construction, and
+    # a build is not broken by that. An intra-molecular contact is reported for
+    # information, and it is called out only when it is close enough to zero to
+    # mean a template that placed two beads on the same point.
+    if intra_best < 0.02:
+        print("check_min_distance: WARNING two beads of one molecule are %.3f nm "
+              "apart, which no bonded parameter asks for. The itp of that "
+              "molecule, or the structure built from it, places them on the same "
+              "point." % intra_best)
+    if best < args.min:
+        print("check_min_distance: WARNING the smallest inter-molecular distance "
+              "is below %.2f nm; minimisation may see a very large force here"
+              % args.min)
         sys.exit(1)
-    else:
-        print("check_min_distance: OK, no overlaps below %.2f nm "
-              "(system should minimise without infinite forces)" % args.min)
+    print("check_min_distance: OK, no inter-molecular overlap below %.2f nm "
+          "(the system should minimise without infinite forces)" % args.min)
 
 
 if __name__ == "__main__":

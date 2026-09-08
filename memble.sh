@@ -457,6 +457,25 @@ if [ -n "$TM_CORE" ] && [ -n "$RES_KEEP" ]; then
   CEN_RES="$_ranges"
   [ -n "$CEN_RES" ] && echo ">>> COBY will center the protein on all TM cores (assembly resid ${CEN_RES})"
 fi
+if [ -z "$CEN_RES" ] && [ -n "$TM_RANGE" ] && [ "$PREBUILT_MULTI" != 1 ]; then
+  # The single-chain path also has to tell COBY where the membrane-spanning part
+  # is. Without it COBY centres the protein on the centroid of the whole
+  # molecule, and a construct whose extramembrane parts differ in length between
+  # the two sides then sits with its transmembrane helix off the bilayer
+  # midplane by half that difference. The system builds, minimises and runs.
+  _first=$(awk '/^ATOM/{r=substr($0,23,4)+0; print r; exit}' oriented_aa.pdb 2>/dev/null)
+  _tl=${TM_RANGE%%:*}; _th=${TM_RANGE##*:}
+  if [ -n "$_first" ] && [ -n "$_tl" ] && [ -n "$_th" ] && [ -n "$N_TMJM" ]; then
+    _ranges=""; _off=0; _i=0
+    while [ "$_i" -lt "$N_COPY" ]; do
+      _a=$((_off + _tl - _first)); _b=$((_off + _th - _first))
+      _ranges="${_ranges:+${_ranges}:}${_a}-${_b}"
+      _off=$((_off + N_TMJM)); _i=$((_i + 1))
+    done
+    CEN_RES="$_ranges"
+    echo ">>> COBY will center the protein on the transmembrane range $TM_RANGE (assembly resid ${CEN_RES})"
+  fi
+fi
 MOLMAP="$PROT_MOLMAP"
 for pn in "${PART_NAMES[@]}"; do MOLMAP="$MOLMAP:$pn"; done
 # generate one single-molecule structure per lipid from its itp connectivity and
@@ -688,6 +707,13 @@ for s in "${UNIQ_SRC[@]}"; do sed_inplace "s#[^\"]*$(basename "$s")#$(local_for 
 # ====================================================================
 # 7. PSF / CRD / PDB (ParmEd)
 # ====================================================================
+# ParmEd writes the PSF, the CRD and a PDB for a viewer. The system runs without
+# them, so a missing ParmEd is reported and the build carries on.
+if ! "$PY" -c 'import parmed' >/dev/null 2>&1; then
+  echo ">>> ParmEd is not installed, so system.psf, system.crd and system_parmed.pdb"
+  echo "    were not written. The system itself is complete and runs without them."
+  echo "    To get the viewer files:  pip install ParmEd"
+else
 "$PY" - "${ALL[*]}" "$PROT_BLOCKS" "${PART_COUNTS[*]}" <<'PYEOF'
 import sys, os, re, string, parmed as pmd
 lipids = set(sys.argv[1].split())
@@ -754,6 +780,7 @@ top.save('system.crd', format='charmmcrd', overwrite=True); top.save('system_par
 segs = sorted({r.segid for r in top.residues})
 print('ParmEd wrote psf/crd/pdb; segids =', segs)
 PYEOF
+fi
 "$GMX" editconf -f system.gro -o system.pdb >/dev/null 2>&1 || true
 
 # ====================================================================
