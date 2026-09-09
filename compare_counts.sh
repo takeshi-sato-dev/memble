@@ -65,10 +65,17 @@ echo "production      $PROD_NS ns per seed ($NPROD_STEPS steps)"
 echo ""
 
 run_stage(){   # run_stage <mdp> <deffnm> <start.gro> [restraint.gro]
+  # No arrays are used here: the bash that ships with macOS is 3.2, and an empty
+  # array under set -u is an unbound variable there.
   local mdp=$1 out=$2 start=$3 restr=${4:-}
-  local rflag=(); [ -n "$restr" ] && rflag=(-r "$restr")
-  "$GMX" grompp -f "$mdp" -c "$start" "${rflag[@]}" -p system.top -n index.ndx \
-      -o "$out.tpr" -maxwarn 10 > "grompp_$out.log" 2>&1 || {
+  if [ -n "$restr" ]; then
+    "$GMX" grompp -f "$mdp" -c "$start" -r "$restr" -p system.top -n index.ndx \
+        -o "$out.tpr" -maxwarn 10 > "grompp_$out.log" 2>&1
+  else
+    "$GMX" grompp -f "$mdp" -c "$start" -p system.top -n index.ndx \
+        -o "$out.tpr" -maxwarn 10 > "grompp_$out.log" 2>&1
+  fi
+  [ $? -eq 0 ] || {
       echo "  grompp failed for $out; see grompp_$out.log"; return 1; }
   "$GMX" mdrun -deffnm "$out" -nt "$NT" > "mdrun_$out.log" 2>&1 || {
       echo "  mdrun failed for $out; see mdrun_$out.log"; return 1; }
@@ -88,6 +95,11 @@ for arm in $ARMS; do
     measured) export AUTO_BALANCE=1 MEMBLE_BALANCE_ITER=2 ;;
   esac
   export OUTTAG=$arm
+  # memble refuses to hand over run files for a system whose leaflets it judges
+  # mismatched, and the arms built from equal numbers and from a table are the
+  # ones it refuses. Whether it refused is recorded below; the arm is run either
+  # way, because what the membrane then does is the point of the comparison.
+  export MEMBLE_ALLOW="leaflet_area"
 
   bash "$R/memble.sh" "$PEP" > build.log 2>&1
   rc=$?
@@ -100,6 +112,8 @@ for arm in $ARMS; do
   fi
   cd "$W" || exit 1
   awk '/^[A-Z0-9_]+ +[0-9]+$/{print "  "$0}' system.top | tail -12
+  grep -E "^leaflet_area|^RESULT:" memble_report.txt | sed 's/^/  gate: /'
+  grep -E "^leaflet_area|^RESULT:" memble_report.txt > "$OUT/gate_${arm}.txt" 2>/dev/null
 
   echo "  minimization and stages 6.1 to 6.5"
   run_stage step6.0_minimization.mdp step6.0 system.gro || continue
