@@ -26,8 +26,24 @@ set -uo pipefail
 OUT=${1:-$PWD/counts_compare}
 R=${R:?set R to the memble directory}
 PEP=${PEP:?set PEP to the all-atom protein PDB}
+# The helper paths and the interpreter are wired here, exactly as the memble
+# wrapper wires them, so that this script needs only R, PEP and a GROMACS.
+VENV=${MEMBLE_VENV:-$HOME/memble-venv}
+[ -x "$VENV/bin/python" ] && PY=${PY:-$VENV/bin/python}
+[ -x "$VENV/bin/martinize2" ] && export MARTINIZE2=${MARTINIZE2:-$VENV/bin/martinize2}
 GMX=${GMX:-$(command -v gmx || command -v gmx_mpi)}
 PY=${PY:-python3}
+export PY GMX
+export DSSP=${DSSP:-mdtraj}
+for h in REP:replicate_and_fix_top POS:inject_posres ORI:orient_tm \
+         SSDSSP:ss_from_dssp AREA:leaflet_area_check PART:place_partner \
+         PRE:prebuild_orient ITP2STRUCT:itp_to_struct DECLASH:declash_gro \
+         ADDWATER:add_water PARTPULL:add_partner_pull FIXVS:fix_vsites \
+         WHOLE:make_protein_whole ZSHIFT:shift_protein_z FIXRESID:fix_protein_resid \
+         MINDIST:check_min_distance GENSS:gen_ss; do
+  v=HELPER_${h%%:*}
+  [ -n "${!v:-}" ] || export "$v=$R/${h##*:}.py"
+done
 NT=${NT:-8}                     # threads for mdrun
 SEEDS=${SEEDS:-"1 2 3"}
 PROD_NS=${PROD_NS:-100}         # length of each production run, in ns
