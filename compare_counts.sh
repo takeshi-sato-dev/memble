@@ -45,6 +45,7 @@ for h in REP:replicate_and_fix_top POS:inject_posres ORI:orient_tm \
   [ -n "${!v:-}" ] || export "$v=$R/${h##*:}.py"
 done
 NT=${NT:-8}                     # threads for mdrun
+MDRUN_EXTRA=${MDRUN_EXTRA:-}    # extra mdrun arguments, e.g. "-nb gpu -pme gpu"
 SEEDS=${SEEDS:-"1 2 3"}
 PROD_NS=${PROD_NS:-100}         # length of each production run, in ns
 ARMS=${ARMS:-"eqn table measured"}
@@ -62,6 +63,7 @@ echo "output          $OUT"
 echo "arms            $ARMS"
 echo "seeds           $SEEDS"
 echo "production      $PROD_NS ns per seed ($NPROD_STEPS steps)"
+echo "mdrun           -nt $NT $MDRUN_EXTRA"
 echo ""
 
 run_stage(){   # run_stage <mdp> <deffnm> <start.gro> [restraint.gro]
@@ -77,7 +79,7 @@ run_stage(){   # run_stage <mdp> <deffnm> <start.gro> [restraint.gro]
   fi
   [ $? -eq 0 ] || {
       echo "  grompp failed for $out; see grompp_$out.log"; return 1; }
-  "$GMX" mdrun -deffnm "$out" -nt "$NT" > "mdrun_$out.log" 2>&1 || {
+  "$GMX" mdrun -deffnm "$out" -nt "$NT" $MDRUN_EXTRA > "mdrun_$out.log" 2>&1 || {
       echo "  mdrun failed for $out; see mdrun_$out.log"; return 1; }
   if ls step*[0-9]b.pdb > /dev/null 2>&1; then
       echo "  INSTABILITY during $out: GROMACS wrote step*b.pdb"; return 1; fi

@@ -130,6 +130,16 @@ mkdir -p "$WORK"; cd "$WORK"; cp "$PEP_AA" input_aa.pdb
 # --- parse composition (symmetric or asymmetric) ---
 sed_inplace(){ local e=$1; shift; local f; for f in "$@"; do sed "$e" "$f" > "$f.__si__" && mv "$f.__si__" "$f"; done; }
 
+# step <what memble is doing now>
+# The terminal shows where a build is in the pipeline, and how long it has taken
+# so far. A build that is rerun by the balance pass carries the same clock.
+_MEMBLE_T0=${_MEMBLE_T0:-$(date +%s)}; export _MEMBLE_T0
+_STEP=0
+_NSTEP=7
+step(){ _STEP=$((_STEP + 1))
+  printf '>>> [%d/%d] %s  (%ds)\n' "$_STEP" "$_NSTEP" "$1" "$(( $(date +%s) - _MEMBLE_T0 ))"; }
+elapsed(){ echo $(( $(date +%s) - _MEMBLE_T0 )); }
+
 # must <what this step does> <what to do about it> -- <command...>
 # A step that changes the system stops the build when it fails, and it says what
 # to do next. A step that only writes a viewer file keeps "|| true". The
@@ -164,6 +174,8 @@ stop(){
   fi
   echo "  Nothing was deleted. The working directory holds the files as they" >&2
   echo "  stood when the step failed, so the state can be inspected." >&2
+  echo "" >&2
+  echo "MEMBLE STOPPED after $(elapsed) s: $what" >&2
   # The build a balance pass set aside is removed here. A build that ended early
   # leaves one working directory, so nothing that reads the directory back finds
   # a second system.gro from a pass that was abandoned.
@@ -301,6 +313,7 @@ find_itp_for_mol(){ local m=$1 f; for f in "${UNIQ_SRC[@]}"; do
 # ====================================================================
 # 1. orient TM along z
 # ====================================================================
+step "orienting the protein on the transmembrane range"
 if [ "$PREBUILT_MULTI" = 1 ]; then
   [ -n "$HELPER_PRE" ] || stop "PREBUILT_MULTI=1 needs HELPER_PRE" \
   "Point HELPER_PRE at prebuild_orient.py in the memble directory:\n  export HELPER_PRE=/path/to/memble/prebuild_orient.py\nsetup.sh sets every HELPER_ variable at once; source it instead of setting them\none at a time."
@@ -337,6 +350,7 @@ fi
 # ====================================================================
 # 2. martinize2 (auto SS; no global EN) + detect protein itp/molname
 # ====================================================================
+step "assigning the secondary structure and coarse-graining the protein"
 MZ=(-ff martini3001 -f oriented_aa.pdb -x cg_peptide.pdb -o protein_only.top -p backbone -cys auto -maxwarn 10)
 # Secondary structure source (SS_OVERRIDE > SS_MODE=tm > SS_MODE=dssp):
 if [ -n "$SS_OVERRIDE" ]; then
@@ -467,6 +481,7 @@ fi
 # ====================================================================
 # 4. COBY build (membrane string from composition / leaflets)
 # ====================================================================
+step "packing the lipids around the protein"
 PACK="optimize_run:yes optimize_max_steps:${COBY_OPT_STEPS} optimize_lipid_push_multiplier:${COBY_PUSH}"
 # Auto-balance the two leaflets of an asymmetric membrane: lipids occupy
 # different areas, so one apl for both leaflets leaves them area-mismatched and
@@ -639,6 +654,7 @@ must "separating overlapping beads left by the packing" \
 #     real bulk-water cushion, and solvate the new slabs (+ salt). No-op if the
 #     protein already fits with the requested water on each side.
 # ====================================================================
+step "sizing the box and adding water and ions"
 if [ -n "$PARTNER_CG" ]; then
   # peripheral protein: place on the chosen leaflet, expand box, then fill water
   "$PY" "$HELPER_PART" --system-gro system.gro --system-top system.top \
@@ -723,6 +739,7 @@ fi
 # 4b. LEAFLET AREA PRE-CHECK (before any gmx MD; abort the build if asymmetric
 #     leaflets are area-mismatched, so it is fixed now, not after a melted run)
 # ====================================================================
+step "measuring the area of every lipid in each leaflet"
 "$PY" "$HELPER_AREA" --gro system.gro --lipids "${ALL[*]}" --asym "$ASYM" --tol "$AREA_TOL" --hard-tol "$AREA_HARD_TOL" --json leaflet_area.json ${APL_OVERRIDE:+--apl "$APL_OVERRIDE"}
 
 # ====================================================================
@@ -971,6 +988,7 @@ fi
 # ====================================================================
 # 8. mdp (GROMACS 2023.x; TEMP-parameterized) + run.sh
 # ====================================================================
+step "writing the staged equilibration"
 RF='nstlist = 20
 cutoff-scheme = Verlet
 verlet-buffer-tolerance = 0.005
@@ -1083,6 +1101,7 @@ echo ">>> build record written to memble_build.json"
 #    memble writes run.sh only after the gate passes, so a build that did not
 #    pass is never handed over as one that is ready to run.
 # ====================================================================
+step "measuring the eight properties of the finished system"
 if [ -f "$HELPER_VERIFY" ]; then
   VERIFY=(--gro system.gro --top system.top --itp-dir "$M3_DIR" --itp-dir .
           --lipids "${ALL[*]}" --water-nm "$WATER_NM"
@@ -1289,6 +1308,10 @@ sleep 20; tail -15 log_step7.txt
    (sysctl -n hw.ncpu on macOS, nproc on Linux).
 ==============================================================================
 MDEOF
+# One last line, so a build that ran in the background is read from its tail.
+_NPASS=$(awk '/^RESULT:/{print $2}' memble_report.txt 2>/dev/null)
+echo ""
+echo "MEMBLE ${_NPASS:-DONE}: ${OUTTAG} built in $(elapsed) s, all eight properties measured."
 echo ">>> Build complete in $WORK."
 echo ">>> Equilibrate + produce stage-by-stage:  cd $WORK && bash run_md.sh"
 echo ">>> Or copy-paste stages manually from:    $WORK/md_steps.txt"
