@@ -128,7 +128,7 @@ be adjusted and the system rebuilt.
 | `SALT_M` | 0.15 | NaCl molarity |
 | `TM_RANGE` | auto | residue range for orientation, for example `619:641` |
 | `SS_OVERRIDE` | unset | explicit secondary-structure string (highest priority) |
-| `SS_MODE` | `dssp` | `dssp` lets DSSP assign secondary structure (GPCRs, multi-helix proteins); `tm` sets the TM range to helix and everything else to coil, so the juxtamembrane stays flexible (single-pass TM and TM-JM peptides) |
+| `SS_MODE` | `dssp` | `dssp` runs DSSP in memble and hands the resulting string to martinize2 with `-ss`, so the assignment is recorded in the output; `dssp-internal` lets martinize2 run DSSP itself, and the string is then not recorded; `tm` sets the TM range to helix (GPCRs, multi-helix proteins); `tm` sets the TM range to helix and everything else to coil, so the juxtamembrane stays flexible (single-pass TM and TM-JM peptides) |
 | `DSSP` | auto | path to a DSSP 2.2.1/3.x binary, or `mdtraj`; 4.x is not compatible with martinize2 |
 | `TM_CORE` | unset | per-chain TM core, e.g. `A:65-88;B:65-88`; used by `SS_MODE=tm` and by prebuilt orientation |
 | `PREBUILT_MULTI` | 0 | `1` uses the chains already assembled in the input PDB instead of replicating one chain |
@@ -136,7 +136,16 @@ be adjusted and the system rebuilt.
 | `MULTI_TM_MINLEN` | 12 | minimum helix length (residues) counted as a TM helix in `MULTI_TM` orientation |
 | `NTERM_SIDE` | unset | `up` or `down`: force the N-terminus to face +z (upper leaflet) or -z (lower leaflet). The orientation axis sign is otherwise arbitrary, so a multi-pass receptor can come out inverted. For a GPCR the N-terminus is extracellular, so `up` puts the extracellular side on the upper leaflet |
 | `RES_KEEP` | unset | per-chain residues to keep with `PREBUILT_MULTI`, e.g. `A:54-103;B:54-103` |
-| `AREA_TOL` | 0.08 | maximum leaflet area mismatch before abort |
+| `AREA_TOL` | 0.08 | largest leaflet area difference accepted |
+| `AREA_HARD_TOL` | 0.25 | an asymmetric build stops above this difference |
+| `MEMBLE_BALANCE_ITER` | 2 | extra builds allowed for the leaflet balance pass; `0` keeps the first build |
+| `MEMBLE_BALANCE_TOL` | 0.03 | leaflet difference above which the balance pass runs |
+| `APL_UPPER`, `APL_LOWER` | unset | area per lipid handed to COBY for each leaflet, bypassing the composition estimate |
+| `MEMBLE_ALLOW` | unset | names of checks to accept, e.g. `"water_layer overlap"` |
+| `MEMBLE_ALLOW_OVERLAP` | 0 | `1` keeps a system that still holds a bead overlap |
+| `MEMBLE_ALLOW_DRIFT` | 0 | `1` starts the production run while the membrane area is still drifting |
+| `MEMBLE_IGNORE_ERRORS` | 0 | `1` continues past a failed build step and records it in `memble_build.json` |
+| `MEMBLE_NO_TM_CENTER` | 0 | `1` leaves COBY to centre the protein on the whole molecule instead of the TM range |
 | `NPROD_STEPS` | 4e8 | production steps at 20 fs (8 microseconds) |
 
 ### Choosing the secondary structure source
@@ -183,6 +192,36 @@ In the working directory: `system.gro`, `system.pdb`, `system.top` with its itp
 includes, `system.psf` and `system_vmd.psf`, `system.crd`, the minimization,
 six equilibration, and production parameter files, and `run.sh`.
 
+Four files record what the system is and how it was built:
+
+| File | Holds |
+| --- | --- |
+| `memble_report.txt`, `memble_report.json` | the eight properties measured on the finished system, and what to do about any that failed |
+| `memble_build.json` | the checksum of the input structure, the secondary structure string, the composition, the box, the temperature, the salt concentration, and the versions of COBY, martinize2 and GROMACS |
+| `leaflet_area.json` | the measured area of every lipid in each leaflet, the area the protein occupies, and how much of each leaflet is made of lipids that both leaflets hold |
+| `equilibration.json` | the area drift and the surface tension over the second half of the last equilibration stage |
+
+## What memble checks before it writes the run files
+
+`run.sh` is written only when all eight of these hold. A check that fails prints
+what failed and what to do about it, and `MEMBLE_ALLOW` accepts one by name.
+
+1. The secondary structure string covers every residue of the protein.
+2. The lipids placed match the composition requested.
+3. The membrane-spanning range sits at the bilayer midplane.
+4. The system is neutral.
+5. The protein and its image in z are further apart than the non-bonded cutoff.
+6. The water above and below the bilayer reaches the requested depth.
+7. No two beads of different molecules are closer than 0.12 nm.
+8. A lipid present in both leaflets occupies the same area in both.
+
+The leaflet areas are measured, not looked up. Each leaflet is tessellated in
+the membrane plane, with every lipid and every protein bead inside the leaflet
+given the region closer to it than to anything else, and the regions are
+integrated by Monte Carlo under the periodic boundary conditions. memble builds
+the system once, measures, corrects the area per lipid of each leaflet from the
+measurement, and builds again.
+
 ## How the equilibration avoids early instability
 
 The six-stage equilibration releases the protein-backbone and lipid-head
@@ -205,8 +244,15 @@ and the leaflet area check for both a balanced and a mismatched bilayer.
 ## Limitations
 
 - A lipid can only be placed if it exists in the supplied Martini 3 lipidome.
-- The leaflet area check uses approximate area-per-lipid values and is a coarse
-  pre-run guard, not an exact measurement. Override values with `APL_OVERRIDE`.
+- The leaflet areas are measured on the system as built, before minimization,
+  and a packed bilayer is not an equilibrated one. The check is a build-time
+  guard, not a measurement of the equilibrated membrane.
+- The bilayer is treated as flat and the areas are projected on the xy plane.
+- The area of a region is set by the neighbours of the molecule, so comparing a
+  lipid against itself in the other leaflet reports the state of the two
+  leaflets only while both present a similar neighbourhood. Where the leaflets
+  hold less than half of their lipids in common, the difference is reported and
+  does not stop the build.
 - Multi-headgroup lipids (cardiolipin, phosphoinositides, gangliosides) may need
   an explicit head bead given in the composition string.
 - The COBY membrane-string grammar (lipid ratio token, leaflet token) can depend
