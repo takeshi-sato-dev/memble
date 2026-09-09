@@ -111,38 +111,116 @@ def _write_gro(path, recs, box="10 10 10"):
     path.write_text("\n".join(lines) + "\n")
 
 
+def _write_gro_grid(path, recs, box=(10.0, 10.0, 10.0)):
+    """Write a gro in which every molecule sits on its own point in the plane.
+
+    The leaflet measurement tessellates the membrane plane, so two molecules on
+    one point make the measurement meaningless. Each molecule is given a cell of
+    a square grid, and the grid of one leaflet is offset from the other so that
+    the two leaflets do not share their points.
+    """
+    from collections import defaultdict
+    per_leaf = defaultdict(list)
+    for r in recs:
+        per_leaf[r[3] > 0].append(r)
+    lines = ["title", str(len(recs))]
+    for up, group in per_leaf.items():
+        n = len(group)
+        ncol = int(n ** 0.5) + 1
+        sx, sy = box[0] / ncol, box[1] / ncol
+        off = 0.0 if up else 0.5
+        for i, (resid, resname, aname, z) in enumerate(group):
+            x = ((i % ncol) + 0.5 + off) * sx % box[0]
+            y = ((i // ncol) + 0.5 + off) * sy % box[1]
+            lines.append("%5s%-5s%5s%5d%8.3f%8.3f%8.3f"
+                         % ("%5d" % resid, resname, aname, 1, x, y, z))
+    lines.append("%.1f %.1f %.1f" % box)
+    path.write_text("\n".join(lines) + "\n")
+
+
 def test_leaflet_area_balanced_passes(tmp_path):
     gro = tmp_path / "sym.gro"
     recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
            [(r, "POPC", "PO4", -2.0) for r in range(101, 201)]
-    _write_gro(gro, recs)
+    _write_gro_grid(gro, recs)
     run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC", "--asym", 1)
 
 
 def test_leaflet_area_mismatch_aborts(tmp_path):
-    # severe mismatch (> hard-tol): upper all POPC (0.64), lower all CHOL (0.40)
+    """A leaflet holding too few lipids for its area stops an asymmetric build.
+
+    The two leaflets share one lipid, so the measurement compares that lipid
+    against itself and needs no reference. The lower leaflet holds 60 molecules
+    where the upper holds 100, so its lipids are stretched.
+    """
     gro = tmp_path / "asym.gro"
     recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
-           [(r, "CHOL", "ROH", -2.0) for r in range(101, 201)]
-    _write_gro(gro, recs)
-    p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC CHOL",
+           [(r, "POPC", "PO4", -2.0) for r in range(101, 161)]
+    _write_gro_grid(gro, recs)
+    p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC",
             "--asym", 1, expect_zero=False)
     assert p.returncode != 0
     assert "MISMATCH" in (p.stdout + p.stderr)
 
 
-def test_leaflet_area_moderate_warns_not_abort(tmp_path):
-    # moderate mismatch (tol < dev < hard-tol): warn but continue so the build
-    # still produces run files; the user balances or lets equilibration absorb it
-    gro = tmp_path / "asym2.gro"
+def test_leaflet_area_without_a_shared_lipid_is_reported(tmp_path):
+    """With no lipid in both leaflets the comparison has nothing to compare.
+
+    A Voronoi region divides the whole plane, and an area per lipid counts
+    lipids into the area of the box. The two are different quantities, so a
+    table of areas per lipid cannot stand in for the missing comparison. The
+    measurement is reported and the build carries on.
+    """
+    gro = tmp_path / "nocommon.gro"
     recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
-           [(r, "POPC", "PO4", -2.0) for r in range(101, 151)] + \
-           [(r, "CHOL", "ROH", -2.0) for r in range(151, 201)]
-    _write_gro(gro, recs)
+           [(r, "CHOL", "ROH", -2.0) for r in range(101, 201)]
+    _write_gro_grid(gro, recs)
     p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC CHOL",
             "--asym", 1, expect_zero=False)
     assert p.returncode == 0
-    assert "WARN" in (p.stdout + p.stderr)
+    assert "no lipid is present in both leaflets" in p.stdout
+
+
+def test_a_reference_never_decides_the_outcome(tmp_path):
+    """--apl is printed beside the measurement and changes nothing."""
+    gro = tmp_path / "nocommon2.gro"
+    recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
+           [(r, "CHOL", "ROH", -2.0) for r in range(101, 201)]
+    _write_gro_grid(gro, recs)
+    p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC CHOL",
+            "--asym", 1, "--apl", "POPC:0.64 CHOL:0.40", expect_zero=False)
+    assert p.returncode == 0
+    assert "against the reference" in p.stdout
+
+
+def test_leaflet_area_moderate_warns_not_abort(tmp_path):
+    """A difference between the tolerance and the hard tolerance warns.
+
+    The lower leaflet holds 85 molecules where the upper holds 100, which
+    stretches its lipids by about a sixth. The build carries on and the report
+    names the difference.
+    """
+    gro = tmp_path / "asym2.gro"
+    recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
+           [(r, "POPC", "PO4", -2.0) for r in range(101, 186)]
+    _write_gro_grid(gro, recs)
+    p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC",
+            "--asym", 1, expect_zero=False)
+    assert p.returncode == 0
+    assert "MISMATCH" in p.stdout
+    assert "WARNING" in p.stdout
+
+
+def test_leaflets_with_the_same_counts_pass(tmp_path):
+    """Equal counts over the same area give the same measured area."""
+    gro = tmp_path / "sym2.gro"
+    recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
+           [(r, "POPC", "PO4", -2.0) for r in range(101, 201)]
+    _write_gro_grid(gro, recs)
+    p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC",
+            "--asym", 1, expect_zero=False)
+    assert p.returncode == 0
+    assert "matched" in p.stdout
 
 
 # ------------------------------------------------ place_partner (post-COBY)

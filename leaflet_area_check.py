@@ -28,8 +28,10 @@ WHAT IS CHECKED
   1. A lipid that is present in both leaflets is measured in both. The two
      values agree in a matched bilayer, and they differ when one leaflet holds
      too few lipids for its area. This check reads nothing but the built system.
-  2. When a reference area is supplied with --apl, the measured area is compared
-     against it as well.
+  2. A reference area supplied with --apl is printed beside the measurement. The
+     two are different quantities, because a Voronoi region divides the whole
+     plane while an area per lipid counts lipids into the area of the box, so
+     the reference is reported and never decides the outcome.
   3. The area that the protein occupies is reported for each leaflet, because a
      leaflet count that ignores the protein is the usual source of a mismatch.
 
@@ -133,8 +135,8 @@ def main():
     ap.add_argument("--lipids", required=True,
                     help="space list of lipid resnames present, e.g. 'CHOL DIPC DPSM'")
     ap.add_argument("--apl", default="",
-                    help="optional reference areas 'NAME:VAL ...' in nm^2, "
-                         "compared against the measured value")
+                    help="reference areas 'NAME:VAL ...' in nm^2, printed beside "
+                         "the measurement; they never decide the outcome")
     ap.add_argument("--tol", type=float, default=0.08,
                     help="largest relative difference accepted between the two "
                          "leaflets (default 0.08)")
@@ -287,7 +289,7 @@ def main():
         if d > worst:
             worst, worst_s, worst_e = d, s, e
 
-    # --- check 2: measured against a reference, when one is given ------------
+    # --- a reference, printed for the reader and used for nothing else -------
     ref_dev = []
     for leaf, sp in per_leaf_species.items():
         for s, v in sp.items():
@@ -297,6 +299,9 @@ def main():
     for leaf, s, got, want, d in ref_dev:
         print("  %-8s %s leaflet: measured %.3f nm^2 against the reference %.3f "
               "nm^2, difference %.1f%%" % (s, leaf, got, want, 100 * d))
+    out["reference"] = [{"leaflet": l, "lipid": s, "measured_nm2": g,
+                         "reference_nm2": w, "relative_difference": round(d, 4)}
+                        for l, s, g, w, d in ref_dev]
 
     out["result"] = "PASS"
     if not shared:
