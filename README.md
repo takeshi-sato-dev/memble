@@ -155,7 +155,7 @@ difference. `memble_build.json` records the difference of every pass in
 | `MEMBLE_ALLOW_OVERLAP` | 0 | `1` keeps a system that still holds a bead overlap |
 | `MEMBLE_ALLOW_DRIFT` | 0 | `1` starts the production run while the membrane area is still drifting |
 | `MEMBLE_IGNORE_ERRORS` | 0 | `1` continues past a failed build step and records it in `memble_build.json` |
-| `MEMBLE_NO_TM_CENTER` | 0 | `1` leaves COBY to centre the protein on the whole molecule instead of the TM range |
+| `MEMBLE_NO_TM_CENTER` | 0 | `1` leaves COBY to center the protein on the whole molecule instead of the TM range |
 | `NPROD_STEPS` | 4e8 | production steps at 20 fs (8 microseconds) |
 
 ### Choosing the secondary structure source
@@ -260,9 +260,9 @@ balance pass on a sequence of measurements it improves and one it does not.
   and a packed bilayer is not an equilibrated one. The check is a build-time
   guard, not a measurement of the equilibrated membrane.
 - The bilayer is treated as flat and the areas are projected on the xy plane.
-- The area of a region is set by the neighbours of the molecule, so comparing a
+- The area of a region is set by the neighbors of the molecule, so comparing a
   lipid against itself in the other leaflet reports the state of the two
-  leaflets only while both present a similar neighbourhood. Where the leaflets
+  leaflets only while both present a similar neighborhood. Where the leaflets
   hold less than half of their lipids in common, the difference is reported and
   does not stop the build.
 - Multi-headgroup lipids (cardiolipin, phosphoinositides, gangliosides) may need

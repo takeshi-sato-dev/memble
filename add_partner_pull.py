@@ -2,7 +2,7 @@
 """
 add_partner_pull.py
 
-Add a one-sided flat-bottom pull restraint (MEMB vs PARTNER centre-of-mass along
+Add a one-sided flat-bottom pull restraint (MEMB vs PARTNER center-of-mass along
 z) to the production mdp, and a PARTNER index group, so that during production
 the peripheral protein:
   * can freely approach and associate with its leaflet (separation may DECREASE),

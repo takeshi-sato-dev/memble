@@ -7,7 +7,7 @@ membrane system, on an EXPLICITLY chosen leaflet, a controlled gap away, and
 grow the box so the partner has bulk water on its side and can NEVER wrap to the
 other (compositionally different) leaflet through the periodic boundary.
 
-Why post-COBY: COBY's lipid-grid optimiser hangs when box_z is much larger than
+Why post-COBY: COBY's lipid-grid optimizer hangs when box_z is much larger than
 the membrane. So the membrane + transmembrane protein are built in a thin box;
 this script then enlarges box_z and inserts the partner into the new space.
 

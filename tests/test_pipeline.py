@@ -567,7 +567,7 @@ def test_add_water_expands_and_matches_top(tmp_path):
 def test_itp_to_struct_exact_vsites_no_collapse(tmp_path):
     """Cholesterol ring virtual sites (virtual_sites3 funct 4) must be built from
     their exact definition so no bead lands on top of another (which caused
-    infinite forces at minimisation). All intra-molecule bead pairs should be a
+    infinite forces at minimization). All intra-molecule bead pairs should be a
     sane distance apart."""
     import numpy as np, os, glob
     itp = None
@@ -895,7 +895,7 @@ def test_fix_protein_resid_restores_per_chain_numbering(tmp_path):
 def test_make_protein_whole_unsplits_chain(tmp_path):
     """A protein chain split across the z boundary is made contiguous and the
     system recentered, so consecutive backbone beads are bonded-distance apart
-    (regression for the LINCS/infinite-force blowup at minimisation)."""
+    (regression for the LINCS/infinite-force blowup at minimization)."""
     (tmp_path / "molecule_0.itp").write_text(
         "[ moleculetype ]\nmolecule_0 1\n[ atoms ]\n" +
         "".join(" %d P5 %d ALA BB %d 0\n" % (i, i, i) for i in range(1, 7)) +
@@ -945,7 +945,7 @@ def test_declash_freeze_protein_keeps_protein_fixed():
 def test_itp_to_struct_no_intramolecular_overlap(tmp_path):
     """Template beads must keep a minimum non-bonded spacing; the two acyl-tail
     roots must not collapse onto each other (regression for the DLPC C1A/C1B
-    overlap that gave an infinite force at minimisation)."""
+    overlap that gave an infinite force at minimization)."""
     import numpy as np, itertools
     itp = tmp_path / "dlpc.itp"
     itp.write_text(

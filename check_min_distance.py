@@ -4,7 +4,7 @@ check_min_distance.py
 
 Report the smallest inter-molecular bead-bead distance (minimum image / PBC) in
 a built system, so the build can confirm there is no overlap that would give an
-infinite force at minimisation. Coincident or near-coincident beads from
+infinite force at minimization. Coincident or near-coincident beads from
 different molecules are what make GROMACS report Fmax = inf; this catches them
 before the user ever runs gmx.
 
@@ -131,11 +131,11 @@ def main():
               "point." % intra_best)
     if best < args.min:
         print("check_min_distance: WARNING the smallest inter-molecular distance "
-              "is below %.2f nm; minimisation may see a very large force here"
+              "is below %.2f nm; minimization may see a very large force here"
               % args.min)
         sys.exit(1)
     print("check_min_distance: OK, no inter-molecular overlap below %.2f nm "
-          "(the system should minimise without infinite forces)" % args.min)
+          "(the system should minimize without infinite forces)" % args.min)
 
 
 if __name__ == "__main__":

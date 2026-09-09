@@ -71,7 +71,7 @@ def test_a_difference_the_check_would_fail_is_corrected(block, tmp_path):
     assert r["correct"] == 1
 
 
-def test_the_correction_moves_the_two_leaflets_towards_each_other(block, tmp_path):
+def test_the_correction_moves_the_two_leaflets_toward_each_other(block, tmp_path):
     r = run(block, tmp_path, [species("CHOL", 0.560, 0.700, 0.01)], up=0.65, lo=0.65)
     # The upper leaflet holds the smaller lipids, so it takes more of them.
     assert r["upper"] > 0.65 > r["lower"]
@@ -86,7 +86,7 @@ def test_the_correction_is_damped(block, tmp_path):
 
 
 def test_leaflets_that_share_few_lipids_are_not_corrected(block, tmp_path):
-    """A lipid takes the area its neighbours leave it, and the neighbours differ."""
+    """A lipid takes the area its neighbors leave it, and the neighbors differ."""
     r = run(block, tmp_path, [species("CHOL", 0.560, 0.700, 0.01)],
             shared_fraction=0.2)
     assert r["correct"] == 0

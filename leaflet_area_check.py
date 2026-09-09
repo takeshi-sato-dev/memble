@@ -37,9 +37,9 @@ WHAT IS CHECKED
 
 WHAT THE COMPARISON CAN AND CANNOT SEPARATE
 
-The area of a Voronoi region is set by the neighbours of the molecule, so a lipid
+The area of a Voronoi region is set by the neighbors of the molecule, so a lipid
 compared against itself in the other leaflet reports the tension of the leaflets
-only while the two leaflets present a similar neighbourhood. In a bilayer whose
+only while the two leaflets present a similar neighborhood. In a bilayer whose
 two leaflets hold largely different lipids, the same lipid sits among PC and SM
 on one side and among PE and PS on the other, and the two areas differ while the
 leaflets carry no tension between them. This script measures how much of each
@@ -187,7 +187,7 @@ def main():
     # The midplane is the mean z of every lipid bead. A head bead per species
     # would need a table, and a sterol has no phosphate: its hydroxyl sits well
     # below the phosphate plane, so a mean taken over the two is a height at
-    # which nothing lies. The tails dominate the bead count and they are centred
+    # which nothing lies. The tails dominate the bead count and they are centered
     # on the midplane.
     mid = float(np.mean(xyz[is_lipid, 2]))
 
@@ -318,7 +318,7 @@ def main():
         print("%s occupies %.1f%% more area in one leaflet than in the other, and "
               "the two leaflets have only %.0f%% of their lipids in common."
               % (worst_s, 100 * worst, 100 * shared_fraction))
-        print("A lipid takes the area its neighbours leave it, and the neighbours "
+        print("A lipid takes the area its neighbors leave it, and the neighbors "
               "differ between these two leaflets, so this difference does not "
               "report the tension between them.")
         print("The measurement is reported and the build continues.")
@@ -327,7 +327,7 @@ def main():
                 with open(args.json, "w") as fh:
                     json.dump(out, fh, indent=2)
             sys.exit("ABORT: a difference above %.0f%% is too large to come from "
-                     "the neighbours alone." % (100 * args.hard_tol))
+                     "the neighbors alone." % (100 * args.hard_tol))
     elif worst > args.tol and worst > 2.0 * worst_e:
         big = "upper" if per_leaf_species["upper"][worst_s]["apl_nm2"] > \
                          per_leaf_species["lower"][worst_s]["apl_nm2"] else "lower"

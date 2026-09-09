@@ -134,7 +134,7 @@ sed_inplace(){ local e=$1; shift; local f; for f in "$@"; do sed "$e" "$f" > "$f
 # A step that changes the system stops the build when it fails, and it says what
 # to do next. A step that only writes a viewer file keeps "|| true". The
 # distinction matters because a system whose vsites, water, ions or residue
-# numbers were never fixed still starts, still minimises, and still returns
+# numbers were never fixed still starts, still minimizes, and still returns
 # numbers that look ordinary.
 must(){
   local what=$1 remedy=$2; shift 2
@@ -355,7 +355,7 @@ elif [ "$SS_MODE" = tm ]; then
   echo ">>> SS_MODE=tm: TM=$SS_TM -> SS length ${#SS_STR} (TM helix, rest coil)"
   MZ+=(-ss "$SS_STR")
 elif [ "$SS_MODE" = dssp-internal ]; then
-  # Old behaviour, kept as an escape hatch: martinize2 runs DSSP itself and the
+  # Old behavior, kept as an escape hatch: martinize2 runs DSSP itself and the
   # string it used is never written down. A build made this way cannot be
   # repeated from the output alone, and verify_system.py reports that.
   echo ">>> SS_MODE=dssp-internal: martinize2 runs DSSP; the assignment is not recorded"
@@ -411,7 +411,7 @@ fi
 # ====================================================================
 # 3. box (xy explicit or auto) + water-derived z + grid placement
 # ====================================================================
-# box_z: membrane thickness + water per side. NOTE: COBY's lipid-grid optimiser
+# box_z: membrane thickness + water per side. NOTE: COBY's lipid-grid optimizer
 # can fail to converge (hang) when box_z is much larger than the membrane, so we
 # size box_z from the membrane, not from a long protruding protein. A protein
 # whose hydrophilic ends stick out slightly is tolerated; for a much taller water
@@ -543,13 +543,13 @@ if [ "${MEMBLE_NO_TM_CENTER:-0}" = "1" ]; then
   # Reproduces the placement a build gives when COBY is not told which residues
   # cross the membrane. Kept so the comparison of Section 3.1 can be repeated.
   CEN_RES=""
-  echo ">>> MEMBLE_NO_TM_CENTER=1: COBY centres the protein on the whole molecule"
+  echo ">>> MEMBLE_NO_TM_CENTER=1: COBY centers the protein on the whole molecule"
 elif [ -z "$CEN_RES" ] && [ -n "$TM_RANGE" ] && [ "$PREBUILT_MULTI" != 1 ]; then
   # The single-chain path also has to tell COBY where the membrane-spanning part
-  # is. Without it COBY centres the protein on the centroid of the whole
+  # is. Without it COBY centers the protein on the centroid of the whole
   # molecule, and a construct whose extramembrane parts differ in length between
   # the two sides then sits with its transmembrane helix off the bilayer
-  # midplane by half that difference. The system builds, minimises and runs.
+  # midplane by half that difference. The system builds, minimizes and runs.
   _first=$(awk '/^ATOM/{r=substr($0,23,4)+0; print r; exit}' oriented_aa.pdb 2>/dev/null)
   _tl=${TM_RANGE%%:*}; _th=${TM_RANGE##*:}
   if [ -n "$_first" ] && [ -n "$_tl" ] && [ -n "$_th" ] && [ -n "$N_TMJM" ]; then
@@ -620,14 +620,14 @@ fi
 # ====================================================================
 # 4a. DECLASH: push apart inter-molecular bead overlaps from dense packing
 #     (rigid-molecule moves; intramolecular geometry preserved) so that
-#     minimisation does not hit infinite Lennard-Jones forces.
+#     minimization does not hit infinite Lennard-Jones forces.
 # ====================================================================
 # COBY places coarse-grained lipids by their real beads but leaves out-of-plane
 # virtual sites (sterol ROH/R3, funct 4) flat; GROMACS then reconstructs them
-# ~0.1 nm away and they can explode at minimisation. Rebuild every vsite exactly
-# from its itp definition before declashing/minimising.
+# ~0.1 nm away and they can explode at minimization. Rebuild every vsite exactly
+# from its itp definition before declashing/minimizing.
 must "rebuilding the sterol virtual sites from their itp definitions" \
-  "COBY leaves out-of-plane virtual sites (sterol ROH and R3, funct 4) flat, and\nGROMACS rebuilds them about 0.1 nm away, which explodes at minimisation.\nCheck that M3_DIR points at the Martini 3 lipidome directory and that it holds\nthe itp of every sterol in the composition:  ls $M3_DIR/*.itp | grep -i chol\nA composition without a sterol does not need this step; remove the sterol or\nadd its itp to M3_DIR." -- \
+  "COBY leaves out-of-plane virtual sites (sterol ROH and R3, funct 4) flat, and\nGROMACS rebuilds them about 0.1 nm away, which explodes at minimization.\nCheck that M3_DIR points at the Martini 3 lipidome directory and that it holds\nthe itp of every sterol in the composition:  ls $M3_DIR/*.itp | grep -i chol\nA composition without a sterol does not need this step; remove the sterol or\nadd its itp to M3_DIR." -- \
   "$PY" "$HELPER_FIXVS" --gro system.gro --top system.top --itp-dir "$M3_DIR"
 must "separating overlapping beads left by the packing" \
   "The packing left two beads of different molecules on top of each other.\nRaise BOX_X and BOX_Y by 1 nm and build again, which gives the packing room.\nOr lower the lipid density with a larger COBY_APL.\nTo keep the system and look at it, set MEMBLE_ALLOW_OVERLAP=1." -- \
@@ -635,7 +635,7 @@ must "separating overlapping beads left by the packing" \
 
 # ====================================================================
 # 4b. ADD WATER: COBY builds the membrane in a thin box (a large box_z hangs its
-#     lipid-grid optimiser). Now grow box_z so a protruding TM-JM protein gets a
+#     lipid-grid optimizer). Now grow box_z so a protruding TM-JM protein gets a
 #     real bulk-water cushion, and solvate the new slabs (+ salt). No-op if the
 #     protein already fits with the requested water on each side.
 # ====================================================================
@@ -659,7 +659,7 @@ elif [ -n "$HELPER_ADDWATER" ]; then
   # TM-JM assembly is far smaller than the real span (6.95 vs 13.73 nm in the
   # four-copy EGFR build), so the box came out ~7 nm too short and the protein
   # ended up overlapping its own periodic image. Unwrap first, then size.
-  # The call after the solvation step below stays: it re-centres in the final
+  # The call after the solvation step below stays: it re-centers in the final
   # box and reports the resulting water cushion.
   if [ -n "$HELPER_WHOLE" ] && [ -f "$HELPER_WHOLE" ]; then
     must "making the protein contiguous before the box is sized" \
@@ -674,7 +674,7 @@ fi
 
 # final PBC-aware declash: catches any bead sitting just outside the box that
 # clashes with the opposite face under periodic boundaries (a common COBY edge
-# effect that produces an infinite force on a water at minimisation).
+# effect that produces an infinite force on a water at minimization).
 # Make the protein contiguous across PBC and center the system on it, BEFORE the
 # final declash. A tall TM-JM protein can straddle the z boundary after
 # assembly/solvation; per-atom wrapping upstream then splits a chain across the
@@ -683,7 +683,7 @@ fi
 # declash must run AFTER this, as the last coordinate step, to clean up.
 if [ -n "$HELPER_WHOLE" ] && [ -f "$HELPER_WHOLE" ]; then
   must "making the protein contiguous in the final box" \
-  "Recentring can split a chain across the box edge, and two consecutive backbone\nbeads a full box apart give an infinite force at minimisation.\nCheck that the protein itp files are in the working directory:  ls molecule_*.itp" -- \
+  "Recentering can split a chain across the box edge, and two consecutive backbone\nbeads a full box apart give an infinite force at minimization.\nCheck that the protein itp files are in the working directory:  ls molecule_*.itp" -- \
     "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir . --box-is-final
 fi
 
@@ -691,12 +691,12 @@ fi
 # from different molecules overlap. The protein is frozen (never moved), so it
 # is not distorted or re-split; only solvent and lipids are pushed apart.
 must "the final separation of overlapping beads" \
-  "Recentring pushed some lipids or water across the box edge and they now overlap.\nRaise BOX_X and BOX_Y by 1 nm and build again.\nTo keep the system and look at it, set MEMBLE_ALLOW_OVERLAP=1." -- \
+  "Recentering pushed some lipids or water across the box edge and they now overlap.\nRaise BOX_X and BOX_Y by 1 nm and build again.\nTo keep the system and look at it, set MEMBLE_ALLOW_OVERLAP=1." -- \
   "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target 0.21 --iters 200 --exclude-beads "ROH R3" --freeze-protein
 
 # Confirm there is no residual overlap that would give an infinite force. A
 # warning here was read past and the build shipped, so this now stops the build.
-# MEMBLE_ALLOW_OVERLAP=1 keeps the old behaviour for a system that is being
+# MEMBLE_ALLOW_OVERLAP=1 keeps the old behavior for a system that is being
 # inspected rather than run.
 if [ -n "$HELPER_MINDIST" ] && [ -f "$HELPER_MINDIST" ]; then
   if ! "$PY" "$HELPER_MINDIST" --gro system.gro --lipids "${ALL[*]}" --min 0.12; then
@@ -704,7 +704,7 @@ if [ -n "$HELPER_MINDIST" ] && [ -f "$HELPER_MINDIST" ]; then
       echo ">>> MEMBLE_ALLOW_OVERLAP=1: continuing with a residual overlap."
     else
       stop "beads of different molecules are closer than 0.12 nm" \
-        "Minimisation of this system reports an infinite force, or it moves the two\nmolecules far enough apart to distort them. The pair is named just above.\n  1. give the packing room:   raise BOX_X and BOX_Y by 1 nm\n  2. lower the lipid density: raise COBY_APL\n  3. if the pair involves the protein, raise SPACING_NM or lower N_COPY\n  4. to keep this system and look at it:  export MEMBLE_ALLOW_OVERLAP=1"
+        "Minimization of this system reports an infinite force, or it moves the two\nmolecules far enough apart to distort them. The pair is named just above.\n  1. give the packing room:   raise BOX_X and BOX_Y by 1 nm\n  2. lower the lipid density: raise COBY_APL\n  3. if the pair involves the protein, raise SPACING_NM or lower N_COPY\n  4. to keep this system and look at it:  export MEMBLE_ALLOW_OVERLAP=1"
     fi
   fi
 fi

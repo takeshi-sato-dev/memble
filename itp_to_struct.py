@@ -19,7 +19,7 @@ the graph's all-pairs shortest-path distance matrix (weighted by the real bond
 lengths). Unlike a straight-line layout, MDS reproduces rings (e.g. cholesterol's
 fused sterol core) and bent chains, so the resulting structure already satisfies
 the bonded distances closely and does NOT explode under LINCS when COBY packs it
-into a membrane and GROMACS minimises it.
+into a membrane and GROMACS minimizes it.
 
 This keeps the tool fully general: any new lipidome is usable from its itp plus
 the ffbonded definitions alone, with no pre-built membrane or external structure.
@@ -489,11 +489,11 @@ def main():
     # final, possibly-reflected real coordinates), so the initial coordinates
     # already match what GROMACS reconstructs every step. This is what keeps
     # sterol ring vsites from landing on a real bead and producing an infinite
-    # Lennard-Jones force at minimisation.
+    # Lennard-Jones force at minimization.
     # Enforce a minimum spacing between non-bonded real beads. The upright layout
     # plus lateral compression can place beads from different branches (e.g. the
     # two acyl-tail roots C1A/C1B) on top of each other; COBY then copies that
-    # overlap into every lipid and minimisation sees an infinite force. Push any
+    # overlap into every lipid and minimization sees an infinite force. Push any
     # too-close non-bonded pair apart and restore bond lengths, a few rounds.
     bonded_pairs = set()
     for (i, j, _t, _l) in edges:

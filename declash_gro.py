@@ -7,12 +7,12 @@ Remove inter-molecular atom overlaps from an assembled coarse-grained system
 DIFFERENT molecules and are closer than a target distance. Intramolecular
 geometry is never touched, so the carefully built single-molecule structures
 (correct bond/constraint lengths) are preserved exactly; the only changes are
-small rigid displacements of whole-bead positions that energy minimisation then
+small rigid displacements of whole-bead positions that energy minimization then
 relaxes.
 
-Dense membrane packing (e.g. tail ends from neighbouring lipids meeting near the
+Dense membrane packing (e.g. tail ends from neighboring lipids meeting near the
 bilayer midplane) can leave bead pairs <0.05 nm apart, which produces effectively
-infinite Lennard-Jones forces and aborts minimisation. Declashing to ~0.3 nm
+infinite Lennard-Jones forces and aborts minimization. Declashing to ~0.3 nm
 gives finite forces so steepest-descent can proceed.
 
 Molecule identity is taken from the gro residue number column (each lipid/ion/
@@ -239,7 +239,7 @@ def main():
     write_gro(args.gro, title, meta, coords, box)
     if remaining:
         print("declash: %d inter-molecular contacts still < %.2f nm after %d "
-              "iters (minimisation will finish the job)"
+              "iters (minimization will finish the job)"
               % (remaining, args.target, args.iters))
     else:
         print("declash: no inter-molecular contacts < %.2f nm remain"

@@ -8,7 +8,7 @@ running. Writes memble_report.json and memble_report.txt, and exits non-zero if
 any check fails, so a build that did not pass is never reported as a success.
 
 The checks are deliberately the ones that a broken build still survives: a
-system that fails any of them starts, minimises and runs, and returns numbers
+system that fails any of them starts, minimizes and runs, and returns numbers
 that look ordinary.
 
   1. secondary structure   the string handed to martinize2 covers every residue
@@ -69,13 +69,13 @@ REMEDY = {
         "     composition needs UPPER and LOWER set separately, not LIPIDS\n"
         "  4. to accept the placed composition:  export MEMBLE_ALLOW=composition",
     "protein_placement":
-        "The protein is not centred in the bilayer, so part of the transmembrane\n"
+        "The protein is not centered in the bilayer, so part of the transmembrane\n"
         "segment sits in water.\n"
         "  1. check that TM_RANGE names the residues that actually cross the\n"
         "     membrane, in the numbering of the input PDB\n"
         "  2. move the protein through the bilayer with Z_SHIFT, in nm:\n"
-        "       export Z_SHIFT=0.4     (towards the upper leaflet)\n"
-        "       export Z_SHIFT=-0.4    (towards the lower leaflet)\n"
+        "       export Z_SHIFT=0.4     (toward the upper leaflet)\n"
+        "       export Z_SHIFT=-0.4    (toward the lower leaflet)\n"
         "  3. a protein oriented upside down is fixed with NTERM_SIDE=up or down",
     "charge":
         "The system is not neutral, so GROMACS applies a uniform background charge\n"
@@ -106,7 +106,7 @@ REMEDY = {
         "  3. to accept the leaflets as built:  export MEMBLE_ALLOW=leaflet_area",
     "overlap":
         "Two beads of different molecules are close enough to give an infinite\n"
-        "force at minimisation. The pair is named above.\n"
+        "force at minimization. The pair is named above.\n"
         "  1. give the packing room:    raise BOX_X and BOX_Y by 1 nm\n"
         "  2. lower the lipid density:  raise COBY_APL\n"
         "  3. for several copies:       raise SPACING_NM, or lower N_COPY\n"
@@ -321,7 +321,7 @@ def main():
     # The midplane is the mean z of every lipid bead. Taking it from head beads
     # instead needs a head bead per species, and a sterol has none: its hydroxyl
     # sits well below the phosphate plane, so a mean over the two is a height at
-    # which nothing lies. The tails dominate the bead count and they are centred
+    # which nothing lies. The tails dominate the bead count and they are centered
     # on the midplane, so the mean over all beads needs no table.
     midplane = (float(np.mean(xyz[is_lipid, 2])) if is_lipid.any()
                 else float("nan"))
@@ -420,7 +420,7 @@ def main():
             zc = float(np.mean(xyz[sel, 2]))
             d = abs(zc - midplane)
             rep.add("protein_placement", d <= args.placement_tol,
-                    "the %s is centred on the bilayer midplane" % label
+                    "the %s is centered on the bilayer midplane" % label
                     if d <= args.placement_tol else
                     "the %s sits %.2f nm off the bilayer midplane" % (label, d),
                     measured=round(d, 3), expected="<= %.2f nm" % args.placement_tol)
@@ -475,7 +475,7 @@ def main():
         clearance = float(box[2]) - span
         need = 2.0 * args.cutoff
         rep.add("periodic_image", clearance >= need,
-                "the protein and its periodic image in z are %.2f nm apart"
+                "the protein and the image of the protein in z are %.2f nm apart"
                 % clearance if clearance >= need else
                 "the protein spans %.2f nm in a box of %.2f nm, leaving %.2f nm "
                 "to its periodic image. A protein that sees its own image gives "
@@ -515,7 +515,7 @@ def main():
         rep.add("overlap", ok,
                 "the closest pair of beads from different molecules is %.3f nm "
                 "apart" % worst if ok else
-                "beads of %s and %s are %.3f nm apart. Minimisation of this "
+                "beads of %s and %s are %.3f nm apart. Minimization of this "
                 "system reports an infinite force, or moves the two molecules "
                 "far enough to distort them." % (pair[0], pair[1], worst),
                 measured=round(worst, 4), expected=">= %.3f nm" % args.min_dist)

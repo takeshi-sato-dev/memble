@@ -323,19 +323,28 @@ def main():
         rc = proc.wait()
         status.caption("finished in %.0f s" % (time.time() - t0))
         gro = next(workdir.glob("**/system.gro"), None)
+        outloc = gro.parent if gro is not None else workdir
+        report = outloc / "memble_report.txt"
         if rc == 0:
-            outloc = gro.parent if gro is not None else workdir
             st.success("Build complete. System saved in: %s" % outloc)
             st.code(
                 "cd %s\n"
                 "vmd -e view.vmd                 # bonded view: system.psf + trajectory\n"
                 "#   chain P = the proteins, protein = all protein, chain M = membrane\n"
                 "bash run_md.sh 6.0              # minimize, then 6.1 .. 6.6, then prod\n"
-                "grep 'water cushion' build.log  # check the protein has enough water"
+                "cat memble_report.txt           # the eight properties, as measured"
                 % outloc, language="bash")
         else:
-            st.error("Build stopped (exit %d). See the log, including any "
-                     "leaflet area mismatch or COBY token issue." % rc)
+            st.error("Build stopped (exit %d). Every check that failed is named "
+                     "in the report below and in the log, and each one carries "
+                     "what to do about the failure. run.sh was not written, so "
+                     "nothing runs by accident." % rc)
+        # The report is what memble measured on the system it wrote. It is shown
+        # for a build that passed and for one that stopped, because a build that
+        # stopped is the one whose report the user needs.
+        if report.is_file():
+            with st.expander("memble_report.txt", expanded=(rc != 0)):
+                st.code(report.read_text(), language="text")
 
         if gro is not None:
             _preview(st, gro)

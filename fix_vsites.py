@@ -8,11 +8,11 @@ COBY (and most membrane builders) place coarse-grained lipids by their real
 beads and leave virtual sites at an approximate, often in-plane, position. For
 sterols the out-of-plane virtual_sites3 funct 4 sites (CHOL ROH, R3) then sit
 ~0.1 nm away from where GROMACS reconstructs them every step; in a packed
-membrane that reconstructed position can land on a neighbouring bead and produce
-an infinite Lennard-Jones force at minimisation. This script walks the system,
+membrane that reconstructed position can land on a neighboring bead and produce
+an infinite Lennard-Jones force at minimization. This script walks the system,
 and for every molecule whose moleculetype declares virtual sites, overwrites the
 vsite coordinates with the exact funct-based reconstruction from that molecule's
-own real beads. Run it right after the build (before declashing and minimising).
+own real beads. Run it right after the build (before declashing and minimizing).
 
 Usage:
   fix_vsites.py --gro system.gro --top system.top [--itp-dir DIR]

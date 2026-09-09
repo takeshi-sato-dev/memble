@@ -7,11 +7,11 @@ it, so no chain is split across the z edge. A membrane-spanning TM-JM protein is
 tall in z; if the assembled box places it across the z boundary, per-atom PBC
 wrapping (done upstream by COBY/solvation) maps part of a chain to the opposite
 face. Consecutive backbone beads then sit a full box apart, the bond constraint
-(~0.31 nm) cannot be satisfied, LINCS blows up and minimisation reports an
+(~0.31 nm) cannot be satisfied, LINCS blows up and minimization reports an
 infinite force.
 
 This walks each protein chain in atom order and removes box jumps between bonded
-neighbours (minimum-image unwrap), recenters the whole system so the protein sits
+neighbors (minimum-image unwrap), recenters the whole system so the protein sits
 in the middle of the box, then rigidly wraps only the non-protein molecules
 (lipids, water, ions) back into the box. The protein is left whole.
 

@@ -6,7 +6,7 @@ Enlarge box_z of a COBY-built CG system and fill the newly created vacuum slabs
 (above and below the existing thin water region) with coarse-grained water (W)
 and salt (NA/CL).
 
-Why: COBY's lipid-grid optimiser hangs when box_z is much larger than the
+Why: COBY's lipid-grid optimizer hangs when box_z is much larger than the
 membrane, so the membrane is built in a thin box. A transmembrane protein with
 long juxtamembrane / extracellular parts then protrudes beyond that thin box with
 too little bulk water, and the periodic image is too close. This script grows the
@@ -15,7 +15,7 @@ the added space.
 
 Approach (keeps GROMACS top/gro consistent):
   * recenter the whole system so the protein z-midpoint sits at the new box
-    centre, set the new box_z;
+    center, set the new box_z;
   * estimate water number density from the existing W beads;
   * place new W beads on a grid in the vacuum slabs at that density, skipping any
     site within --clear nm of an existing atom (so the protein is not clashed);
