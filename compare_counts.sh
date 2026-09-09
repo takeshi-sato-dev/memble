@@ -97,9 +97,13 @@ for arm in $ARMS; do
   export OUTTAG=$arm
   # memble refuses to hand over run files for a system whose leaflets it judges
   # mismatched, and the arms built from equal numbers and from a table are the
-  # ones it refuses. Whether it refused is recorded below; the arm is run either
-  # way, because what the membrane then does is the point of the comparison.
-  export MEMBLE_ALLOW="leaflet_area"
+  # ones it refuses. Those two are run anyway, because what the membrane then
+  # does with those numbers is the point of the comparison. The arm built from
+  # the measurement faces the gate, so that a failure there is seen.
+  case $arm in
+    eqn|table) export MEMBLE_ALLOW="leaflet_area" ;;
+    *)         unset MEMBLE_ALLOW ;;
+  esac
 
   bash "$R/memble.sh" "$PEP" > build.log 2>&1
   rc=$?
@@ -112,8 +116,13 @@ for arm in $ARMS; do
   fi
   cd "$W" || exit 1
   awk '/^[A-Z0-9_]+ +[0-9]+$/{print "  "$0}' system.top | tail -12
-  grep -E "^leaflet_area|^RESULT:" memble_report.txt | sed 's/^/  gate: /'
-  grep -E "^leaflet_area|^RESULT:" memble_report.txt > "$OUT/gate_${arm}.txt" 2>/dev/null
+  # what the check measured on this build, and whether memble would have handed
+  # the run files over without --allow
+  cp leaflet_area.json "$OUT/leaflet_${arm}.json" 2>/dev/null
+  grep -E "LEAFLET AREA MISMATCH|The leaflets are matched" "$D/build.log" \
+      | tail -1 | sed 's/^/  check: /'
+  { grep -E "LEAFLET AREA MISMATCH|The leaflets are matched" "$D/build.log" | tail -1
+    grep -E "^leaflet_area|^RESULT:" memble_report.txt; } > "$OUT/gate_${arm}.txt" 2>/dev/null
 
   echo "  minimization and stages 6.1 to 6.5"
   run_stage step6.0_minimization.mdp step6.0 system.gro || continue
