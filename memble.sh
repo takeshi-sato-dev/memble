@@ -33,7 +33,10 @@
 #
 set -eo pipefail
 
-MEMBLE_VERSION=1.2.0
+MEMBLE_VERSION=1.2.1
+_SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+_START_DIR=$(pwd)
+_ARG1=${1:-}
 case "${1:-}" in
   -v|--version) echo "memble $MEMBLE_VERSION"; exit 0 ;;
 esac
@@ -221,6 +224,74 @@ for nm in "${ALL[@]}"; do
   in_list "$src" "${UNIQ_SRC[@]}" || UNIQ_SRC+=("$src")
 done
 
+# Two files of a lipidome can define the same moleculetype. Including both gives
+# a topology that GROMACS refuses, and the refusal names a molecule the build
+# never asked for. memble chooses the smallest set of files that covers the
+# requested lipids and that defines nothing twice.
+_CONS=$("$PY" - "$M3_DIR" "${ALL[*]}" <<'CONSEOF'
+import glob, os, sys
+d, want = sys.argv[1], sys.argv[2].split()
+defs = {}
+for f in sorted(glob.glob(os.path.join(d, "*.itp"))):
+    names, sec = set(), None
+    try:
+        fh = open(f, errors="replace")
+    except OSError:
+        continue
+    with fh:
+        for raw in fh:
+            line = raw.split(";")[0].strip()
+            if not line:
+                continue
+            if line.startswith("["):
+                sec = line.strip("[] ").lower()
+                continue
+            if sec == "moleculetype":
+                names.add(line.split()[0]); sec = None
+    if names:
+        defs[f] = names
+need = set(want)
+chosen = []
+while need:
+    best, cover = None, 0
+    for f, names in defs.items():
+        if f in chosen:
+            continue
+        if any(defs[c] & names for c in chosen):
+            continue
+        n = len(names & need)
+        if n > cover:
+            best, cover = f, n
+    if best is None:
+        left = sorted(need)
+        blocked = [f for f, n in defs.items() if n & need]
+        print("COLLIDE|%s|%s" % (",".join(left), ",".join(os.path.basename(x) for x in blocked[:4])))
+        sys.exit(0)
+    chosen.append(best); need -= defs[best]
+for f in chosen:
+    print(f)
+CONSEOF
+)
+case "$_CONS" in
+  COLLIDE\|*)
+    _left=$(printf '%s' "$_CONS" | cut -d'|' -f2)
+    _files=$(printf '%s' "$_CONS" | cut -d'|' -f3)
+    stop "the lipids $_left cannot be taken from $M3_DIR without defining a molecule twice" \
+      "Two files of the lipidome define the same moleculetype, and a topology that\nincludes both is refused by GROMACS.\nThe files that carry these lipids are: $_files\n  1. choose lipids that one of those files supplies on its own\n  2. or move the file you do not need out of \$M3_DIR\nList what each file defines:\n  for f in \$M3_DIR/*.itp; do echo \"== \$f\"; awk '/^\\[ *moleculetype/{g=1;next} g&&NF&&\$1!~/^;/{print \"   \"\$1;g=0}' \"\$f\"; done"
+    ;;
+  "") ;;
+  *)
+    UNIQ_SRC=()
+    while IFS= read -r _f; do [ -n "$_f" ] && UNIQ_SRC+=("$_f"); done <<< "$_CONS"
+    echo ">>> itp sources: ${#UNIQ_SRC[@]} file(s)"
+    for _f in "${UNIQ_SRC[@]}"; do echo "      $(basename "$_f")"; done
+    ;;
+esac
+# Every later lookup has to resolve to the files that were chosen, and not to
+# the first file of the lipidome that happens to define the molecule.
+find_itp_for_mol(){ local m=$1 f; for f in "${UNIQ_SRC[@]}"; do
+  awk -v mol="$m" '/^\[ *moleculetype *\]/{g=1;next} g&&NF&&$1!~/^;/{if($1==mol)fd=1;g=0} END{exit !fd}' "$f" && { echo "$f"; return 0; }; done; return 1; }
+
 # ====================================================================
 # 1. orient TM along z
 # ====================================================================
@@ -407,6 +478,11 @@ if [ "$ASYM" -eq 1 ] && [ -z "$COBY_MEMBRANE" ] && [ "$AUTO_BALANCE" != 0 ] \
     echo ">>> leaflet auto-balance: upper apl=${APL_UP} lower apl=${APL_LO} (from composition; set AUTO_BALANCE=0 to disable)"
   fi
 fi
+# A measured value replaces the tabulated one. The balance pass below sets these
+# from the areas it measured on a first build, so the counts stop depending on a
+# table of areas per lipid.
+[ -z "${APL_UPPER:-}" ] || { APL_UP="$APL_UPPER"; echo ">>> upper apl set to ${APL_UP} from a measurement"; }
+[ -z "${APL_LOWER:-}" ] || { APL_LO="$APL_LOWER"; echo ">>> lower apl set to ${APL_LO} from a measurement"; }
 if [ -n "$COBY_MEMBRANE" ]; then MEMB="$COBY_MEMBRANE"
 elif [ "$ASYM" -eq 1 ]; then
   MEMB="$PACK ${COBY_LEAFLET}:upper apl:${APL_UP}"; for i in "${!UN[@]}"; do MEMB+=" lipid:${UN[$i]}:${UR[$i]}:params:m3lib"; done
@@ -457,7 +533,12 @@ if [ -n "$TM_CORE" ] && [ -n "$RES_KEEP" ]; then
   CEN_RES="$_ranges"
   [ -n "$CEN_RES" ] && echo ">>> COBY will center the protein on all TM cores (assembly resid ${CEN_RES})"
 fi
-if [ -z "$CEN_RES" ] && [ -n "$TM_RANGE" ] && [ "$PREBUILT_MULTI" != 1 ]; then
+if [ "${MEMBLE_NO_TM_CENTER:-0}" = "1" ]; then
+  # Reproduces the placement a build gives when COBY is not told which residues
+  # cross the membrane. Kept so the comparison of Section 3.1 can be repeated.
+  CEN_RES=""
+  echo ">>> MEMBLE_NO_TM_CENTER=1: COBY centres the protein on the whole molecule"
+elif [ -z "$CEN_RES" ] && [ -n "$TM_RANGE" ] && [ "$PREBUILT_MULTI" != 1 ]; then
   # The single-chain path also has to tell COBY where the membrane-spanning part
   # is. Without it COBY centres the protein on the centroid of the whole
   # molecule, and a construct whose extramembrane parts differ in length between
@@ -639,6 +720,59 @@ fi
 "$PY" "$HELPER_AREA" --gro system.gro --lipids "${ALL[*]}" --asym "$ASYM" --tol "$AREA_TOL" --hard-tol "$AREA_HARD_TOL" --json leaflet_area.json ${APL_OVERRIDE:+--apl "$APL_OVERRIDE"}
 
 # ====================================================================
+# 4c. BALANCE PASS
+#     The number of lipids a leaflet receives came from a table of areas per
+#     lipid, and a table cannot know what a mixture with a sterol and a protein
+#     in it will do. This pass reads the areas that were just measured, corrects
+#     the area per lipid of each leaflet by what the measurement says, and builds
+#     the system again. MEMBLE_BALANCE_ITER=0 keeps the first build.
+# ====================================================================
+_ITER=${_MEMBLE_ITER:-0}
+if [ "$ASYM" = 1 ] && [ "$_ITER" -lt "${MEMBLE_BALANCE_ITER:-2}" ] && [ -f leaflet_area.json ]; then
+  _FIX=$("$PY" - "$APL_UP" "$APL_LO" <<'BALEOF'
+import json, sys
+up, lo = float(sys.argv[1]), float(sys.argv[2])
+try:
+    d = json.load(open("leaflet_area.json"))
+except Exception:
+    sys.exit(0)
+sh = d.get("shared_species", [])
+if not sh or d.get("shared_fraction", 0.0) < 0.5:
+    sys.exit(0)
+# The area a shared lipid takes in each leaflet, averaged over the shared
+# lipids. A leaflet whose lipids are larger than the other holds too few of
+# them, and its area per lipid has to come down by that ratio.
+au = sum(x["upper_nm2"] for x in sh) / len(sh)
+al = sum(x["lower_nm2"] for x in sh) / len(sh)
+worst = max(abs(x["upper_nm2"] - x["lower_nm2"]) / (0.5 * (x["upper_nm2"] + x["lower_nm2"]))
+            for x in sh)
+import os
+if worst < float(os.environ.get("MEMBLE_BALANCE_TOL", "0.03")) or au <= 0 or al <= 0:
+    sys.exit(0)
+mid = 0.5 * (au + al)
+nu = up * mid / au
+nl = lo * mid / al
+print("%.4f %.4f %.4f" % (nu, nl, worst))
+BALEOF
+)
+  if [ -n "$_FIX" ]; then
+    _NU=$(printf '%s' "$_FIX" | awk '{print $1}')
+    _NL=$(printf '%s' "$_FIX" | awk '{print $2}')
+    _WS=$(printf '%s' "$_FIX" | awk '{printf "%.1f", 100*$3}')
+    echo ""
+    echo ">>> balance pass $((_ITER + 1)): the leaflets differ by ${_WS}% and the"
+    echo "    areas per lipid are corrected from the measurement:"
+    echo "      upper ${APL_UP} -> ${_NU}"
+    echo "      lower ${APL_LO} -> ${_NL}"
+    echo "    building again."
+    cd "$_START_DIR" || cd ..
+    rm -rf "$WORK"
+    _MEMBLE_ITER=$((_ITER + 1)) APL_UPPER="$_NU" APL_LOWER="$_NL" \
+      exec bash "$_SELF" "$_ARG1"
+  fi
+fi
+
+# ====================================================================
 # 5. per-lipid bead-count sanity assert
 # ====================================================================
 for nm in "${ALL[@]}"; do src=$(find_itp_for_mol "$nm")
@@ -714,7 +848,7 @@ if ! "$PY" -c 'import parmed' >/dev/null 2>&1; then
   echo "    were not written. The system itself is complete and runs without them."
   echo "    To get the viewer files:  pip install ParmEd"
 else
-"$PY" - "${ALL[*]}" "$PROT_BLOCKS" "${PART_COUNTS[*]}" <<'PYEOF'
+if ! "$PY" - "${ALL[*]}" "$PROT_BLOCKS" "${PART_COUNTS[*]}" <<'PYEOF'
 import sys, os, re, string, parmed as pmd
 lipids = set(sys.argv[1].split())
 prot_blocks = [int(x) for x in sys.argv[2].split()] if sys.argv[2].strip() else []
@@ -780,6 +914,11 @@ top.save('system.crd', format='charmmcrd', overwrite=True); top.save('system_par
 segs = sorted({r.segid for r in top.residues})
 print('ParmEd wrote psf/crd/pdb; segids =', segs)
 PYEOF
+then :; else
+  echo ">>> ParmEd could not write system.psf, system.crd and system_parmed.pdb."
+  echo "    Those files are for a viewer. The system itself is complete and runs"
+  echo "    without them, so the build carries on."
+fi
 fi
 "$GMX" editconf -f system.gro -o system.pdb >/dev/null 2>&1 || true
 
@@ -900,7 +1039,8 @@ echo ">>> build record written to memble_build.json"
 if [ -f "$HELPER_VERIFY" ]; then
   VERIFY=(--gro system.gro --top system.top --itp-dir "$M3_DIR" --itp-dir .
           --lipids "${ALL[*]}" --water-nm "$WATER_NM"
-          --ss-mode "$SS_SOURCE" --meta memble_build.json)
+          --ss-mode "$SS_SOURCE" --meta memble_build.json
+          --leaflet-json leaflet_area.json)
   [ -n "$SS_USED" ]  && VERIFY+=(--ss-string "$SS_USED")
   [ -n "$TM_RANGE" ] && VERIFY+=(--tm-resids "$TM_RANGE")
   [ -n "$UPPER" ]    && VERIFY+=(--expect-upper "$UPPER")

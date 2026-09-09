@@ -20,6 +20,7 @@ that look ordinary.
   6. water layer           the water above and below reaches the requested depth
   7. overlap               no two beads of different molecules are closer than
                            the minimum separation
+  8. leaflet area          one lipid occupies the same area in both leaflets
 
 Usage:
   verify_system.py --gro system.gro --top system.top --itp-dir . \
@@ -46,7 +47,7 @@ SOLVENT = {"W", "WF", "NA", "CL", "ION", "NA+", "CL-", "TIP3", "SOL"}
 HEAD_PRIORITY = ("PO4", "PO1", "PO2", "ROH", "GL1", "GL0", "NC3", "GM1",
                  "AM1", "CNO")
 CHECKS = ("secondary_structure", "composition", "protein_placement", "charge",
-          "periodic_image", "water_layer", "overlap")
+          "periodic_image", "water_layer", "overlap", "leaflet_area")
 
 # What to do when a check fails. A gate that only says "FAIL" costs the user the
 # afternoon that the gate was meant to save.
@@ -95,6 +96,14 @@ REMEDY = {
         "  1. raise the box in z:  export BOX_Z=<the value memble reported + 2>\n"
         "  2. or lower the request:  export WATER_NM=2.0\n"
         "  3. a tall protein in a small xy box leaves no room; raise BOX_X and BOX_Y",
+    "leaflet_area":
+        "One lipid occupies a different area in the two leaflets, so the leaflet\n"
+        "with the larger area holds too few lipids and its lipids are stretched.\n"
+        "  1. change the ratio of that lipid between UPPER and LOWER by the ratio\n"
+        "     of the two measured areas, and build again\n"
+        "  2. a protein that reaches into one leaflet takes area from that leaflet\n"
+        "     alone; leaflet_area.json reports how much\n"
+        "  3. to accept the leaflets as built:  export MEMBLE_ALLOW=leaflet_area",
     "overlap":
         "Two beads of different molecules are close enough to give an infinite\n"
         "force at minimisation. The pair is named above.\n"
@@ -285,6 +294,8 @@ def main():
     ap.add_argument("--allow", action="append", default=[],
                     help="skip one named check (repeatable)")
     ap.add_argument("--meta", default="", help="JSON file of build provenance")
+    ap.add_argument("--leaflet-json", default="",
+                    help="leaflet_area.json written by leaflet_area_check.py")
     ap.add_argument("--out-json", default="memble_report.json")
     ap.add_argument("--out-txt", default="memble_report.txt")
     args = ap.parse_args()
@@ -306,12 +317,14 @@ def main():
     rep = Report()
     skip = set(args.allow)
 
-    # --- bilayer midplane from head beads -------------------------------
-    head_idx = [i for i in range(len(resn))
-                if is_lipid[i] and aname[i] in HEAD_PRIORITY]
-    if not head_idx:
-        head_idx = [i for i in range(len(resn)) if is_lipid[i]]
-    midplane = float(np.mean(xyz[head_idx, 2])) if head_idx else float("nan")
+    # --- bilayer midplane ------------------------------------------------
+    # The midplane is the mean z of every lipid bead. Taking it from head beads
+    # instead needs a head bead per species, and a sterol has none: its hydroxyl
+    # sits well below the phosphate plane, so a mean over the two is a height at
+    # which nothing lies. The tails dominate the bead count and they are centred
+    # on the midplane, so the mean over all beads needs no table.
+    midplane = (float(np.mean(xyz[is_lipid, 2])) if is_lipid.any()
+                else float("nan"))
 
     # --- 1. secondary structure ------------------------------------------
     prot_resids = sorted(set(resid[i] for i in range(len(resn)) if is_prot[i]))
@@ -340,17 +353,17 @@ def main():
         want_up = parse_ratio(args.expect_upper)
         want_lo = parse_ratio(args.expect_lower)
         counts = {"upper": Counter(), "lower": Counter()}
-        seen_mol = set()
+        # One entry per molecule, and the leaflet from the mean z of that
+        # molecule. A lipid is counted whether or not it carries a bead the
+        # script knows the name of.
+        by_mol = defaultdict(list)
         for i in range(len(resn)):
-            if not is_lipid[i]:
-                continue
-            key = (resid[i], resn[i])
-            if key in seen_mol:
-                continue
-            if aname[i] in HEAD_PRIORITY:
-                seen_mol.add(key)
-                side = "upper" if xyz[i, 2] >= midplane else "lower"
-                counts[side][resn[i]] += 1
+            if is_lipid[i]:
+                by_mol[(resid[i], resn[i])].append(i)
+        for (rid_, rn_), ids in by_mol.items():
+            side = ("upper" if float(np.mean(xyz[ids, 2])) >= midplane
+                    else "lower")
+            counts[side][rn_] += 1
         measured = {s: dict(counts[s]) for s in counts}
         if not want_up and not want_lo:
             total = sum(counts["upper"].values()) + sum(counts["lower"].values())
@@ -506,6 +519,51 @@ def main():
                 "system reports an infinite force, or moves the two molecules "
                 "far enough to distort them." % (pair[0], pair[1], worst),
                 measured=round(worst, 4), expected=">= %.3f nm" % args.min_dist)
+
+    # --- 8. leaflet areas --------------------------------------------------
+    # The areas are measured by leaflet_area_check.py during the build. Reading
+    # the result back here keeps one report: a build cannot say PASS while a
+    # leaflet was reported as mismatched somewhere earlier in the same log.
+    if "leaflet_area" in skip:
+        rep.add("leaflet_area", True, "skipped by --allow", skipped=True)
+    elif not args.leaflet_json or not os.path.isfile(args.leaflet_json):
+        rep.add("leaflet_area", True,
+                "no leaflet measurement was recorded for this build", skipped=True)
+    else:
+        try:
+            with open(args.leaflet_json) as fh:
+                la = json.load(fh)
+        except (OSError, ValueError):
+            la = {}
+        res = la.get("result", "")
+        shared = la.get("shared_species", [])
+        worst = max(shared, key=lambda x: x.get("relative_difference", 0.0),
+                    default=None)
+        if res == "FAIL" and worst:
+            rep.add("leaflet_area", False,
+                    "%s occupies %.1f%% more area in one leaflet than in the "
+                    "other, against a standard error of %.1f%% on that difference"
+                    % (worst["lipid"], 100 * worst["relative_difference"],
+                       100 * worst.get("relative_standard_error", 0.0)),
+                    measured=round(100 * worst["relative_difference"], 2),
+                    expected="within the tolerance, or within twice the "
+                             "standard error")
+        elif res == "REPORTED":
+            f = la.get("shared_fraction")
+            if worst and f is not None:
+                d = "%s differs by %.1f%% between the leaflets, which hold %.0f%% " \
+                    "of their lipids in common, so the difference does not report " \
+                    "the tension between them" % (worst["lipid"],
+                        100 * worst["relative_difference"], 100 * f)
+            else:
+                d = "no lipid is present in both leaflets, so the two leaflets " \
+                    "were not compared"
+            rep.add("leaflet_area", True, d, skipped=True)
+        else:
+            d = (100 * worst["relative_difference"]) if worst else 0.0
+            rep.add("leaflet_area", True,
+                    "the leaflets are matched; the largest difference is %.1f%%"
+                    % d, measured=round(d, 2), expected="within the tolerance")
 
     # ----------------------------------------------------------------- out
     meta = {}

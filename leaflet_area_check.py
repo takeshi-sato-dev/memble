@@ -33,6 +33,18 @@ WHAT IS CHECKED
   3. The area that the protein occupies is reported for each leaflet, because a
      leaflet count that ignores the protein is the usual source of a mismatch.
 
+WHAT THE COMPARISON CAN AND CANNOT SEPARATE
+
+The area of a Voronoi region is set by the neighbours of the molecule, so a lipid
+compared against itself in the other leaflet reports the tension of the leaflets
+only while the two leaflets present a similar neighbourhood. In a bilayer whose
+two leaflets hold largely different lipids, the same lipid sits among PC and SM
+on one side and among PE and PS on the other, and the two areas differ while the
+leaflets carry no tension between them. This script measures how much of each
+leaflet is made of lipids that both leaflets hold. Below half, the difference is
+reported and the build continues, and only a difference above the hard tolerance
+stops it.
+
 WHAT THE NUMBERS ARE
 
 The tessellation divides the whole plane among the molecules, so the area it
@@ -170,14 +182,12 @@ def main():
     for i in np.nonzero(is_lipid)[0]:
         mol_beads[(int(resid[i]), resn[i])].append(i)
 
-    head_z = []
-    for key, idx in mol_beads.items():
-        names = set(aname[j] for j in idx)
-        for p in HEAD_PRIORITY:
-            if p in names:
-                head_z.extend(xyz[j, 2] for j in idx if aname[j] == p)
-                break
-    mid = float(np.mean(head_z)) if head_z else float(np.mean(xyz[is_lipid, 2]))
+    # The midplane is the mean z of every lipid bead. A head bead per species
+    # would need a table, and a sterol has no phosphate: its hydroxyl sits well
+    # below the phosphate plane, so a mean taken over the two is a height at
+    # which nothing lies. The tails dominate the bead count and they are centred
+    # on the midplane.
+    mid = float(np.mean(xyz[is_lipid, 2]))
 
     mols = []          # (species, leaflet, x, y)
     for (rid, rn), idx in mol_beads.items():
@@ -216,7 +226,8 @@ def main():
         for j, m in enumerate(here):
             by_species[m[0]].append(areas[j])
         species = {s: {"n": len(v), "apl_nm2": round(float(np.mean(v)), 4),
-                       "sd_nm2": round(float(np.std(v)), 4)}
+                       "sd_nm2": round(float(np.std(v)), 4),
+                       "se_nm2": round(float(np.std(v) / np.sqrt(len(v))), 4)}
                    for s, v in sorted(by_species.items())}
         per_leaf_species[leaf] = species
 
@@ -234,29 +245,47 @@ def main():
         print("%s leaflet: %d lipids, lipid area %.1f nm^2, protein area %.1f nm^2"
               % (leaf, d["n_lipids"], d["lipid_area_nm2"], d["protein_area_nm2"]))
         for s, v in d["species"].items():
-            print("    %-8s n=%-5d Voronoi area %.3f nm^2 (sd %.3f)"
-                  % (s, v["n"], v["apl_nm2"], v["sd_nm2"]))
+            print("    %-8s n=%-5d Voronoi area %.3f +/- %.3f nm^2 (sd %.3f)"
+                  % (s, v["n"], v["apl_nm2"], v["se_nm2"], v["sd_nm2"]))
 
     # --- check 1: a species in both leaflets is measured in both -------------
     shared = []
     if "upper" in per_leaf_species and "lower" in per_leaf_species:
         for s in per_leaf_species["upper"]:
             if s in per_leaf_species["lower"]:
-                a = per_leaf_species["upper"][s]["apl_nm2"]
-                b = per_leaf_species["lower"][s]["apl_nm2"]
+                A = per_leaf_species["upper"][s]
+                B = per_leaf_species["lower"][s]
+                a, b = A["apl_nm2"], B["apl_nm2"]
                 mean = (a + b) / 2.0
                 if mean > 0:
-                    shared.append((s, a, b, abs(a - b) / mean))
-    out["shared_species"] = [{"lipid": s, "upper_nm2": a, "lower_nm2": b,
-                              "relative_difference": round(d, 4)}
-                             for s, a, b, d in shared]
+                    se = float(np.hypot(A["se_nm2"], B["se_nm2"]))
+                    shared.append((s, a, b, abs(a - b) / mean,
+                                   se / mean if mean else float("inf")))
+    # How much of each leaflet is made of lipids that both leaflets hold.
+    shared_names = set(per_leaf_species.get("upper", {})) & set(
+        per_leaf_species.get("lower", {}))
+    overlap = []
+    for leaf, sp in per_leaf_species.items():
+        tot = sum(v["n"] for v in sp.values())
+        if tot:
+            overlap.append(sum(sp[s]["n"] for s in shared_names if s in sp) / tot)
+    shared_fraction = float(np.mean(overlap)) if overlap else 0.0
+    out["shared_fraction"] = round(shared_fraction, 3)
 
-    worst, worst_s = 0.0, ""
-    for s, a, b, d in shared:
-        print("  %-8s upper %.3f nm^2, lower %.3f nm^2, difference %.1f%%"
-              % (s, a, b, 100 * d))
+    out["shared_species"] = [{"lipid": s, "upper_nm2": a, "lower_nm2": b,
+                              "relative_difference": round(d, 4),
+                              "relative_standard_error": round(e, 4)}
+                             for s, a, b, d, e in shared]
+
+    # A difference is read against the scatter that produced it. With a few tens
+    # of molecules of one lipid in a leaflet the mean area carries a standard
+    # error of a few percent, and a difference of that size says nothing.
+    worst, worst_s, worst_e = 0.0, "", 0.0
+    for s, a, b, d, e in shared:
+        print("  %-8s upper %.3f nm^2, lower %.3f nm^2, difference %.1f%% "
+              "(standard error %.1f%%)" % (s, a, b, 100 * d, 100 * e))
         if d > worst:
-            worst, worst_s = d, s
+            worst, worst_s, worst_e = d, s, e
 
     # --- check 2: measured against a reference, when one is given ------------
     ref_dev = []
@@ -278,7 +307,23 @@ def main():
               "reported and the build continues.")
         print("      To have this checked, give a reference with --apl, or put one "
               "lipid in both leaflets.")
-    elif worst > args.tol:
+    elif worst > args.tol and worst > 2.0 * worst_e and shared_fraction < 0.5:
+        out["result"] = "REPORTED"
+        print("")
+        print("%s occupies %.1f%% more area in one leaflet than in the other, and "
+              "the two leaflets have only %.0f%% of their lipids in common."
+              % (worst_s, 100 * worst, 100 * shared_fraction))
+        print("A lipid takes the area its neighbours leave it, and the neighbours "
+              "differ between these two leaflets, so this difference does not "
+              "report the tension between them.")
+        print("The measurement is reported and the build continues.")
+        if args.asym and worst > args.hard_tol:
+            if args.json:
+                with open(args.json, "w") as fh:
+                    json.dump(out, fh, indent=2)
+            sys.exit("ABORT: a difference above %.0f%% is too large to come from "
+                     "the neighbours alone." % (100 * args.hard_tol))
+    elif worst > args.tol and worst > 2.0 * worst_e:
         big = "upper" if per_leaf_species["upper"][worst_s]["apl_nm2"] > \
                          per_leaf_species["lower"][worst_s]["apl_nm2"] else "lower"
         out["result"] = "FAIL"
@@ -310,8 +355,17 @@ def main():
               "into the equilibration. Watch the area and the thickness.")
     else:
         print("")
-        print("The leaflets are matched within %.1f%%. The largest difference is "
-              "%s, at %.1f%%." % (100 * args.tol, worst_s or "none", 100 * worst))
+        if worst > args.tol:
+            print("The largest difference is %s, at %.1f%%, and the standard "
+                  "error of that difference is %.1f%%. The two leaflets are not "
+                  "separated by the scatter of the measurement."
+                  % (worst_s, 100 * worst, 100 * worst_e))
+        else:
+            print("The leaflets are matched within %.1f%%. The largest difference "
+                  "is %s, at %.1f%% (standard error %.1f%%), and the two leaflets "
+                  "have %.0f%% of their lipids in common."
+                  % (100 * args.tol, worst_s or "none", 100 * worst,
+                     100 * worst_e, 100 * shared_fraction))
 
     print("")
     print("Measured by Monte Carlo integration of the planar Voronoi regions "
