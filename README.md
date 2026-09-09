@@ -112,6 +112,15 @@ If the two leaflets are not area-balanced, the build stops before any molecular
 dynamics is run and reports the per-leaflet areas, so the composition or box can
 be adjusted and the system rebuilt.
 
+Before it stops, memble tries to correct the counts itself. It measures the areas,
+corrects the area per lipid of each leaflet, and builds again. The pass runs only
+on a difference that exceeds both `MEMBLE_BALANCE_TOL` and twice its own standard
+error, so a difference the size of the measurement scatter is left alone. Each
+pass moves the areas per lipid `MEMBLE_BALANCE_DAMP` of the way to the
+measurement, and memble restores the earlier build when a pass does not lower the
+difference. `memble_build.json` records the difference of every pass in
+`balance_passes`.
+
 ## Parameters
 
 | Variable | Default | Meaning |
@@ -139,7 +148,8 @@ be adjusted and the system rebuilt.
 | `AREA_TOL` | 0.08 | largest leaflet area difference accepted |
 | `AREA_HARD_TOL` | 0.25 | an asymmetric build stops above this difference |
 | `MEMBLE_BALANCE_ITER` | 2 | extra builds allowed for the leaflet balance pass; `0` keeps the first build |
-| `MEMBLE_BALANCE_TOL` | 0.03 | leaflet difference above which the balance pass runs |
+| `MEMBLE_BALANCE_TOL` | `AREA_TOL` | leaflet difference above which the balance pass runs |
+| `MEMBLE_BALANCE_DAMP` | 0.5 | share of the correction that one balance pass applies |
 | `APL_UPPER`, `APL_LOWER` | unset | area per lipid handed to COBY for each leaflet, bypassing the composition estimate |
 | `MEMBLE_ALLOW` | unset | names of checks to accept, e.g. `"water_layer overlap"` |
 | `MEMBLE_ALLOW_OVERLAP` | 0 | `1` keeps a system that still holds a bead overlap |
@@ -197,7 +207,7 @@ Four files record what the system is and how it was built:
 | File | Holds |
 | --- | --- |
 | `memble_report.txt`, `memble_report.json` | the eight properties measured on the finished system, and what to do about any that failed |
-| `memble_build.json` | the checksum of the input structure, the secondary structure string, the composition, the box, the temperature, the salt concentration, and the versions of COBY, martinize2 and GROMACS |
+| `memble_build.json` | the checksum of the input structure, the secondary structure string, the composition, the box, the temperature, the salt concentration, and the versions of COBY, martinize2 and GROMACS, and the leaflet difference of every balance pass |
 | `leaflet_area.json` | the measured area of every lipid in each leaflet, the area the protein occupies, and how much of each leaflet is made of lipids that both leaflets hold |
 | `equilibration.json` | the area drift and the surface tension over the second half of the last equilibration stage |
 
@@ -239,7 +249,9 @@ python3 -m pytest tests/ -v
 
 The suite exercises each helper on synthetic inputs: orientation tilt, grid
 placement and separation, automatic and explicit head-bead restraint injection,
-and the leaflet area check for both a balanced and a mismatched bilayer.
+the leaflet area check for both a balanced and a mismatched bilayer, the eight
+properties of the verification gate on a passing and a failing system, and the
+balance pass on a sequence of measurements it improves and one it does not.
 
 ## Limitations
 

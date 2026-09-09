@@ -100,6 +100,10 @@ def main():
     ap.add_argument("--gro", required=True)
     ap.add_argument("--top", required=True)
     ap.add_argument("--itp-dir", default="")
+    ap.add_argument("--box-is-final", action="store_true",
+                    help="report the water cushion. Before the solvation the box "
+                         "still grows, so the cushion of that box means nothing "
+                         "and is not reported.")
     args = ap.parse_args()
 
     atoms_by_mol = {}
@@ -215,6 +219,8 @@ def main():
     cushion = (box[2] - span) / 2.0
     print("make_protein_whole: unwrapped %d chains, protein z-span %.2f nm, "
           "centered in box_z %.2f nm" % (len(prot_spans), span, box[2]))
+    if not args.box_is_final:
+        return
     if cushion < 1.5:
         print("make_protein_whole: WARNING water cushion beyond the protein is "
               "only %.2f nm per side; semiisotropic pressure will shrink box_z "

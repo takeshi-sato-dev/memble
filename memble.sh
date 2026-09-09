@@ -33,7 +33,7 @@
 #
 set -eo pipefail
 
-MEMBLE_VERSION=1.2.1
+MEMBLE_VERSION=1.2.2
 _SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 _START_DIR=$(pwd)
 _ARG1=${1:-}
@@ -164,6 +164,12 @@ stop(){
   fi
   echo "  Nothing was deleted. The working directory holds the files as they" >&2
   echo "  stood when the step failed, so the state can be inspected." >&2
+  # The build a balance pass set aside is removed here. A build that ended early
+  # leaves one working directory, so nothing that reads the directory back finds
+  # a second system.gro from a pass that was abandoned.
+  case "${_MEMBLE_BEST_DIR:-}" in
+    *_work.balance_keep) rm -rf "$_MEMBLE_BEST_DIR" ;;
+  esac
   exit 1
 }
 parse_into(){ local tok nm ra hd
@@ -678,7 +684,7 @@ fi
 if [ -n "$HELPER_WHOLE" ] && [ -f "$HELPER_WHOLE" ]; then
   must "making the protein contiguous in the final box" \
   "Recentring can split a chain across the box edge, and two consecutive backbone\nbeads a full box apart give an infinite force at minimisation.\nCheck that the protein itp files are in the working directory:  ls molecule_*.itp" -- \
-    "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir .
+    "$PY" "$HELPER_WHOLE" --gro system.gro --top system.top --itp-dir . --box-is-final
 fi
 
 # FINAL declash and the last coordinate-modifying step: guarantees no two beads
@@ -726,51 +732,91 @@ fi
 #     in it will do. This pass reads the areas that were just measured, corrects
 #     the area per lipid of each leaflet by what the measurement says, and builds
 #     the system again. MEMBLE_BALANCE_ITER=0 keeps the first build.
+#
+#     Three rules keep the pass from making the system worse. It corrects only a
+#     difference that the check itself would fail, so a difference of the size of
+#     its own standard error is left alone. It moves the areas per lipid half way
+#     to the correction, so one pass cannot overshoot. It keeps every build it
+#     makes, compares each new difference against the smallest one so far, and
+#     restores the earlier build when a pass does not lower the difference.
 # ====================================================================
 _ITER=${_MEMBLE_ITER:-0}
-if [ "$ASYM" = 1 ] && [ "$_ITER" -lt "${MEMBLE_BALANCE_ITER:-2}" ] && [ -f leaflet_area.json ]; then
-  _FIX=$("$PY" - "$APL_UP" "$APL_LO" <<'BALEOF'
-import json, sys
-up, lo = float(sys.argv[1]), float(sys.argv[2])
+_KEEP="$_START_DIR/${OUTTAG}_work.balance_keep"
+_BAL_LOG=${_MEMBLE_BAL_LOG:-}
+if [ "$ASYM" = 1 ] && [ -f leaflet_area.json ]; then
+  _FIX=$("$PY" - "$APL_UP" "$APL_LO" "${MEMBLE_BALANCE_TOL:-$AREA_TOL}" <<'BALEOF'
+import json, os, sys
+up, lo, tol = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
+damp = float(os.environ.get("MEMBLE_BALANCE_DAMP", "0.5"))
 try:
     d = json.load(open("leaflet_area.json"))
 except Exception:
     sys.exit(0)
 sh = d.get("shared_species", [])
-if not sh or d.get("shared_fraction", 0.0) < 0.5:
+if not sh:
     sys.exit(0)
+# The lipid whose two areas differ by the most, and the standard error of that
+# difference. A difference no larger than twice its own standard error is what
+# the measurement returns on a balanced membrane, and it is not corrected.
+w = max(sh, key=lambda x: x["relative_difference"])
+worst, worst_e = w["relative_difference"], w["relative_standard_error"]
 # The area a shared lipid takes in each leaflet, averaged over the shared
 # lipids. A leaflet whose lipids are larger than the other holds too few of
 # them, and its area per lipid has to come down by that ratio.
 au = sum(x["upper_nm2"] for x in sh) / len(sh)
 al = sum(x["lower_nm2"] for x in sh) / len(sh)
-worst = max(abs(x["upper_nm2"] - x["lower_nm2"]) / (0.5 * (x["upper_nm2"] + x["lower_nm2"]))
-            for x in sh)
-import os
-if worst < float(os.environ.get("MEMBLE_BALANCE_TOL", "0.03")) or au <= 0 or al <= 0:
-    sys.exit(0)
+ok = 1
+if d.get("shared_fraction", 0.0) < 0.5: ok = 0
+if worst <= tol or worst <= 2.0 * worst_e: ok = 0
+if au <= 0 or al <= 0: ok = 0
 mid = 0.5 * (au + al)
-nu = up * mid / au
-nl = lo * mid / al
-print("%.4f %.4f %.4f" % (nu, nl, worst))
+nu = up * (1.0 + damp * (mid / au - 1.0)) if au > 0 else up
+nl = lo * (1.0 + damp * (mid / al - 1.0)) if al > 0 else lo
+print("%.4f %.4f %.4f %.4f %d" % (worst, worst_e, nu, nl, ok))
 BALEOF
 )
   if [ -n "$_FIX" ]; then
-    _NU=$(printf '%s' "$_FIX" | awk '{print $1}')
-    _NL=$(printf '%s' "$_FIX" | awk '{print $2}')
-    _WS=$(printf '%s' "$_FIX" | awk '{printf "%.1f", 100*$3}')
-    echo ""
-    echo ">>> balance pass $((_ITER + 1)): the leaflets differ by ${_WS}% and the"
-    echo "    areas per lipid are corrected from the measurement:"
-    echo "      upper ${APL_UP} -> ${_NU}"
-    echo "      lower ${APL_LO} -> ${_NL}"
-    echo "    building again."
-    cd "$_START_DIR" || cd ..
-    rm -rf "$WORK"
-    _MEMBLE_ITER=$((_ITER + 1)) APL_UPPER="$_NU" APL_LOWER="$_NL" \
-      exec bash "$_SELF" "$_ARG1"
+    _W=$( printf '%s' "$_FIX" | awk '{print $1}')
+    _WE=$(printf '%s' "$_FIX" | awk '{print $2}')
+    _NU=$(printf '%s' "$_FIX" | awk '{print $3}')
+    _NL=$(printf '%s' "$_FIX" | awk '{print $4}')
+    _OK=$(printf '%s' "$_FIX" | awk '{print $5}')
+    _WS=$(awk -v x="$_W" 'BEGIN{printf "%.1f", 100*x}')
+    _BEST=${_MEMBLE_BEST_DIFF:-}
+    _BAL_LOG="${_BAL_LOG:+$_BAL_LOG }pass${_ITER}:${_WS}%"
+    # Is this build the best one so far?
+    if [ -z "$_BEST" ] || awk -v a="$_W" -v b="$_BEST" 'BEGIN{exit !(a<b)}'; then
+      _IS_BEST=1
+    else
+      _IS_BEST=0
+    fi
+    if [ "$_IS_BEST" = 1 ] && [ "$_OK" = 1 ] && [ "$_ITER" -lt "${MEMBLE_BALANCE_ITER:-2}" ]; then
+      echo ""
+      echo ">>> balance pass $((_ITER + 1)): the leaflets differ by ${_WS}%, above the"
+      echo "    tolerance of $(awk -v x="${MEMBLE_BALANCE_TOL:-$AREA_TOL}" 'BEGIN{printf "%.1f", 100*x}')% and above twice the standard error of $(awk -v x="$_WE" 'BEGIN{printf "%.1f", 100*x}')%."
+      echo "    The areas per lipid are corrected half way to the measurement:"
+      echo "      upper ${APL_UP} -> ${_NU}"
+      echo "      lower ${APL_LO} -> ${_NL}"
+      echo "    This build is kept, and memble builds the system again."
+      cd "$_START_DIR" || cd ..
+      rm -rf "$_KEEP"; mv "$WORK" "$_KEEP"
+      _MEMBLE_ITER=$((_ITER + 1)) _MEMBLE_BEST_DIFF="$_W" _MEMBLE_BEST_DIR="$_KEEP" \
+      _MEMBLE_BAL_LOG="$_BAL_LOG" APL_UPPER="$_NU" APL_LOWER="$_NL" \
+        exec bash "$_SELF" "$_ARG1"
+    fi
+    if [ "$_IS_BEST" = 0 ] && [ -d "${_MEMBLE_BEST_DIR:-/nonexistent}" ]; then
+      _BS=$(awk -v x="$_BEST" 'BEGIN{printf "%.1f", 100*x}')
+      echo ""
+      echo ">>> the correction of pass ${_ITER} left the leaflets ${_WS}% apart, against"
+      echo "    ${_BS}% before it, so the correction did not improve the membrane."
+      echo "    memble restores the build that gave ${_BS}% and stops correcting."
+      cd "$_START_DIR" || cd ..
+      rm -rf "$WORK"; mv "$_MEMBLE_BEST_DIR" "$WORK"; cd "$WORK"
+      _BAL_LOG="${_BAL_LOG} restored:pass$((_ITER - 1))"
+    fi
   fi
 fi
+rm -rf "$_KEEP"
 
 # ====================================================================
 # 5. per-lipid bead-count sanity assert
@@ -1025,6 +1071,7 @@ fi
   printf '  "gromacs": "%s",\n' "$("$GMX" --version 2>/dev/null | awk -F': *' '/GROMACS version/{print $2; exit}')"
   printf '  "martinize2": "%s",\n' "$("$MARTINIZE2" --version 2>&1 | head -1 | tr -d '"')"
   printf '  "coby": "%s",\n' "$("$PY" -c 'import COBY;print(getattr(COBY,"__version__","unknown"))' 2>/dev/null)"
+  printf '  "balance_passes": "%s",\n' "${_BAL_LOG:-}"
   printf '  "degraded_steps": "%s"\n' "${MEMBLE_DEGRADED:-}"
   printf '}\n'
 } > memble_build.json
