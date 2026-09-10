@@ -63,7 +63,7 @@ echo "output          $OUT"
 echo "arms            $ARMS"
 echo "seeds           $SEEDS"
 echo "production      $PROD_NS ns per seed ($NPROD_STEPS steps)"
-echo "mdrun           -nt $NT $MDRUN_EXTRA"
+echo "mdrun           -ntmpi 1 -ntomp $NT $MDRUN_EXTRA"
 echo ""
 
 run_stage(){   # run_stage <mdp> <deffnm> <start.gro> [restraint.gro]
@@ -79,7 +79,10 @@ run_stage(){   # run_stage <mdp> <deffnm> <start.gro> [restraint.gro]
   fi
   [ $? -eq 0 ] || {
       echo "  grompp failed for $out; see grompp_$out.log"; return 1; }
-  "$GMX" mdrun -deffnm "$out" -nt "$NT" $MDRUN_EXTRA > "mdrun_$out.log" 2>&1 || {
+  # One thread-MPI rank and $NT OpenMP threads. A system of this size needs no
+  # domain decomposition, and GROMACS otherwise takes one rank per GPU it sees,
+  # which fails when the thread count is not divisible by the number of GPUs.
+  "$GMX" mdrun -deffnm "$out" -ntmpi 1 -ntomp "$NT" $MDRUN_EXTRA > "mdrun_$out.log" 2>&1 || {
       echo "  mdrun failed for $out; see mdrun_$out.log"; return 1; }
   if ls step*[0-9]b.pdb > /dev/null 2>&1; then
       echo "  INSTABILITY during $out: GROMACS wrote step*b.pdb"; return 1; fi
