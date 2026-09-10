@@ -19,6 +19,11 @@
 # Usage:
 #   R=/path/to/memble bash compare_counts.sh /path/to/output/dir
 #
+# The script resumes. Run it again on the same output directory and it keeps
+# every build that is there, every stage that finished, and every seed that was
+# measured, and continues a stage that was cut off from the checkpoint GROMACS
+# wrote. FRESH=1 throws all of that away and starts over.
+#
 # The environment memble needs (M3_DIR, GMX, PY, MARTINIZE2, HELPER_*) must be
 # set, exactly as for a normal build.
 set -uo pipefail
@@ -69,20 +74,41 @@ echo ""
 run_stage(){   # run_stage <mdp> <deffnm> <start.gro> [restraint.gro]
   # No arrays are used here: the bash that ships with macOS is 3.2, and an empty
   # array under set -u is an unbound variable there.
-  local mdp=$1 out=$2 start=$3 restr=${4:-}
-  if [ -n "$restr" ]; then
-    "$GMX" grompp -f "$mdp" -c "$start" -r "$restr" -p system.top -n index.ndx \
-        -o "$out.tpr" -maxwarn 10 > "grompp_$out.log" 2>&1
-  else
-    "$GMX" grompp -f "$mdp" -c "$start" -p system.top -n index.ndx \
-        -o "$out.tpr" -maxwarn 10 > "grompp_$out.log" 2>&1
+  #
+  # A stage this script has already finished is left as it stands, and a stage
+  # that was cut off partway continues from the checkpoint GROMACS wrote. The
+  # whole comparison is therefore restarted by running the script again, with
+  # the same output directory, and it picks up where it stopped.
+  local mdp=$1 out=$2 start=$3 restr=${4:-} rc=0 cont="" redir=">"
+  if [ -f "$out.gro" ]; then
+    echo "  $out was already finished"; return 0
   fi
-  [ $? -eq 0 ] || {
-      echo "  grompp failed for $out; see grompp_$out.log"; return 1; }
+  if [ ! -f "$out.tpr" ]; then
+    if [ -n "$restr" ]; then
+      "$GMX" grompp -f "$mdp" -c "$start" -r "$restr" -p system.top -n index.ndx \
+          -o "$out.tpr" -maxwarn 10 > "grompp_$out.log" 2>&1 || rc=1
+    else
+      "$GMX" grompp -f "$mdp" -c "$start" -p system.top -n index.ndx \
+          -o "$out.tpr" -maxwarn 10 > "grompp_$out.log" 2>&1 || rc=1
+    fi
+    [ $rc -eq 0 ] || {
+        echo "  grompp failed for $out; see grompp_$out.log"; return 1; }
+  fi
+  if [ -f "$out.cpt" ]; then
+    cont="-cpi $out.cpt -append"
+    echo "  $out continues from the checkpoint it left"
+  fi
   # One thread-MPI rank and $NT OpenMP threads. A system of this size needs no
   # domain decomposition, and GROMACS otherwise takes one rank per GPU it sees,
   # which fails when the thread count is not divisible by the number of GPUs.
-  "$GMX" mdrun -deffnm "$out" -ntmpi 1 -ntomp "$NT" $MDRUN_EXTRA > "mdrun_$out.log" 2>&1 || {
+  if [ -n "$cont" ]; then
+    "$GMX" mdrun -deffnm "$out" -ntmpi 1 -ntomp "$NT" $cont $MDRUN_EXTRA \
+        >> "mdrun_$out.log" 2>&1 || rc=1
+  else
+    "$GMX" mdrun -deffnm "$out" -ntmpi 1 -ntomp "$NT" $MDRUN_EXTRA \
+        > "mdrun_$out.log" 2>&1 || rc=1
+  fi
+  [ $rc -eq 0 ] || {
       echo "  mdrun failed for $out; see mdrun_$out.log"; return 1; }
   if ls step*[0-9]b.pdb > /dev/null 2>&1; then
       echo "  INSTABILITY during $out: GROMACS wrote step*b.pdb"; return 1; fi
@@ -92,7 +118,12 @@ run_stage(){   # run_stage <mdp> <deffnm> <start.gro> [restraint.gro]
 for arm in $ARMS; do
   echo "=== $arm ==="
   D="$OUT/$arm"
-  rm -rf "$D"; mkdir -p "$D"; cd "$D" || exit 1
+  W="$D/${arm}_work"
+  # FRESH=1 throws away whatever is there and builds the arm again. Without it,
+  # a build that is already in place is used as it stands, so that a comparison
+  # that was stopped resumes instead of starting over.
+  [ "${FRESH:-0}" = "1" ] && rm -rf "$D"
+  mkdir -p "$D"; cd "$D" || exit 1
 
   case $arm in
     eqn)      export AUTO_BALANCE=0 MEMBLE_BALANCE_ITER=0 ;;
@@ -110,9 +141,13 @@ for arm in $ARMS; do
     *)         unset MEMBLE_ALLOW ;;
   esac
 
-  bash "$R/memble.sh" "$PEP" > build.log 2>&1
-  rc=$?
-  W="$D/${arm}_work"
+  if [ -f "$W/system.gro" ]; then
+    echo "  the build was already there, and is used as it stands"
+    rc=0
+  else
+    bash "$R/memble.sh" "$PEP" > build.log 2>&1
+    rc=$?
+  fi
   if [ $rc -ne 0 ] || [ ! -f "$W/system.gro" ]; then
     echo "  the build did not finish (exit $rc); see $D/build.log"
     # a build that memble refuses to hand over is itself a result, and the
@@ -141,6 +176,9 @@ for arm in $ARMS; do
   [ $ok -eq 1 ] || continue
 
   for s in $SEEDS; do
+    if [ -f "$OUT/relax_${arm}_s${s}.json" ]; then
+      echo "  seed $s was already measured"; continue
+    fi
     echo "  seed $s: stage 6.6 and $PROD_NS ns"
     sed '/gen-seed/d' step6.6_equilibration.mdp > s${s}_6.6.mdp
     echo "gen-seed = $s" >> s${s}_6.6.mdp
