@@ -36,50 +36,71 @@ composition-specific is hardcoded.
 - Python 3.9 or newer with `numpy`, `parmed`, and `COBY`
 - `martinize2` (Vermouth) and `dssp` (or `mkdssp`) on the PATH
 - GROMACS 2023.x
-- A Martini 3 lipidome distribution (the itp files defining your lipids, water,
-  and ions)
+- The Martini 3 lipidome: the itp files that define the lipids, the water and
+  the ions
 
-Install the Python tools, for example:
+`setup.sh` below installs the Python tools. DSSP and GROMACS are installed
+separately through your package manager or module system, and the lipidome is
+downloaded once, as follows.
+
+### Getting the Martini 3 lipidome
+
+memble places a lipid only if the supplied lipidome defines it, so the itp files
+have to be on disk before the first build. The parameters are the refined
+Martini 3 lipidome of Pedersen et al., ACS Cent. Sci. 2025, 11, 1598, and the
+Martini Force Field Initiative distributes them:
 
 ```
-pip install numpy parmed COBY vermouth
+git clone https://github.com/Martini-Force-Field-Initiative/M3-Lipid-Parameters
 ```
 
-DSSP and GROMACS are installed separately through your package manager or module
-system.
+Collect every itp file into one directory, including `martini_v3.0.0.itp`, the
+ions and the solvents, and give that directory as `M3_DIR`. A build reads the
+directory where it stands, and copies or installs nothing:
+
+```
+M3_DIR=~/m3lipidome
+ls $M3_DIR
+  martini_v3.0.0.itp                        martini_v3.0.0_phospholipids_PC_v2.itp
+  martini_v3.0.0_ions_v1.itp                martini_v3.0.0_sterols_v1.itp
+  martini_v3.0.0_solvents_v1.itp            martini_v3.0_phosphoinositides_v1.0.itp
+  ...
+```
 
 ## Installation
 
+Two steps, in this order. A build started before `setup.sh` has run stops with
+`command not found`, and that message names neither the tool that is missing nor
+the step that was skipped.
+
 ```
-git clone https://github.com/XXX/memble
+git clone https://github.com/takeshi-sato-dev/memble.git
 cd memble
-chmod +x memble.sh
-```
-
-The four helper scripts (`orient_tm.py`, `replicate_and_fix_top.py`,
-`inject_posres.py`, `leaflet_area_check.py`) live at the repository root.
-
-## Setup (one command) and no-activate use
-
-Create a dedicated virtual environment so nothing in your existing setup
-changes. This is safe to rerun: it rebuilds the venv from scratch.
-
-```
 bash setup.sh
 ```
 
-Then run without activating the venv each time:
+`setup.sh` creates a virtual environment at `~/memble-venv` (override with
+`MEMBLE_VENV`), installs numpy, parmed, COBY, vermouth, mdtraj and streamlit
+into it, and then reports every import that failed, where martinize2 is, and
+whether GROMACS is on the PATH. Nothing in an existing Python setup changes.
+Rerunning it deletes the environment and builds it again, so a botched install
+is repaired by running it a second time, and `rm -rf ~/memble-venv` resets it.
+
+Then build, without activating anything:
 
 ```
-M3_DIR=/path/to/martini3_lipidome GMX=gmx LIPIDS="CHOL:1 DIPC:1 DPSM:1" \
-  ./memble protein_AA.pdb        # single build (or ensemble if N_REP > 1)
+M3_DIR=~/m3lipidome GMX=gmx LIPIDS="CHOL:1 DIPC:1 DPSM:1" \
+  ./memble protein_AA.pdb        # one build, or an ensemble if N_REP > 1
 
-./memble-gui                           # launch the GUI
+./memble-gui                     # the same build, from a browser
 ```
 
-`memble` and `memble-gui` use the venv interpreter and tools directly and wire the
-helper paths for you, so no `source .../activate` is needed. The venv lives at
-`~/memble-venv` (override with `MEMBLE_VENV`); delete that folder to reset.
+`memble` and `memble-gui` call the interpreter and the tools of that virtual
+environment and set the helper paths, so `source .../activate` is never needed.
+The helper scripts themselves (`orient_tm.py`, `replicate_and_fix_top.py`,
+`inject_posres.py`, `leaflet_area_check.py` and the rest) live at the repository
+root, and their paths are given by hand only when `memble.sh` is called directly,
+as in the last example below.
 
 ## Quick start
 
@@ -87,16 +108,12 @@ Symmetric ternary raft mixture, four protein copies:
 
 ```
 LIPIDS="CHOL:1 DIPC:1 DPSM:1" \
-M3_DIR=/path/to/martini3_lipidome \
+M3_DIR=~/m3lipidome \
 GMX=gmx \
-HELPER_REP=$PWD/replicate_and_fix_top.py \
-HELPER_POS=$PWD/inject_posres.py \
-HELPER_ORI=$PWD/orient_tm.py \
-HELPER_AREA=$PWD/leaflet_area_check.py \
-./memble.sh protein_AA.pdb
+./memble protein_AA.pdb
 
 cd memble_work
-./run.sh
+NT=8 bash run.sh
 ```
 
 Asymmetric bilayer, explicit box, thicker water, lower temperature:
@@ -104,8 +121,19 @@ Asymmetric bilayer, explicit box, thicker water, lower temperature:
 ```
 UPPER="CHOL:1 DPSM:2 POPC:1" LOWER="POPC:3 POPE:1" \
 BOX_X=60 BOX_Y=50 WATER_NM=3 TEMP=300 \
-M3_DIR=... GMX=gmx HELPER_REP=... HELPER_POS=... HELPER_ORI=... HELPER_AREA=... \
-./memble.sh protein_AA.pdb
+M3_DIR=~/m3lipidome GMX=gmx \
+./memble protein_AA.pdb
+```
+
+`memble.sh` can be called in place of `memble`, and it then reads the interpreter
+and the helper paths from the command line:
+
+```
+PY=~/memble-venv/bin/python MARTINIZE2=~/memble-venv/bin/martinize2 \
+HELPER_REP=$PWD/replicate_and_fix_top.py HELPER_POS=$PWD/inject_posres.py \
+HELPER_ORI=$PWD/orient_tm.py HELPER_AREA=$PWD/leaflet_area_check.py \
+LIPIDS="CHOL:1 DIPC:1 DPSM:1" M3_DIR=~/m3lipidome GMX=gmx \
+bash memble.sh protein_AA.pdb
 ```
 
 If the two leaflets are not area-balanced, the build stops before any molecular
@@ -241,6 +269,24 @@ Parrinello-Rahman barostat is used only for production. The run script checks
 for the step coordinate files that GROMACS writes when atoms move too far and
 stops if the system is destabilizing.
 
+### Running on a machine that carries more than one GPU
+
+GROMACS takes one thread-MPI rank for every GPU it can see, and it stops the run
+when the number of threads is not divisible by the number of ranks. A system of
+this size needs no domain decomposition, so `run.sh`, `run_md.sh` and
+`md_steps.txt` all place one rank and give it `NT` OpenMP threads. `NT` defaults
+to 8, and the number of cores to use is set on the command line:
+
+```
+NT=16 bash run.sh
+```
+
+To give one run one card, name the card as well:
+
+```
+CUDA_VISIBLE_DEVICES=0 NT=16 bash run.sh
+```
+
 ## Tests
 
 ```
@@ -277,12 +323,12 @@ Released under the Apache License 2.0. See `LICENSE`.
 
 ## Contributing
 
-Issues and pull requests are welcome. See `CONTRIBUTING.md`.
+Issues and pull requests are welcome.
 
 ## Citation
 
-If this tool is useful in your work, please cite the accompanying paper (see
-`paper.md`) and the underlying tools: Martini 3, martinize2 and Vermouth, COBY,
-GROMACS, and ParmEd.
+If this tool is useful in your work, please cite the accompanying paper and the
+underlying tools: Martini 3, the Martini 3 lipidome, martinize2 and Vermouth,
+COBY, GROMACS, and ParmEd.
 
 The software is archived on Zenodo: https://doi.org/10.5281/zenodo.20684812
