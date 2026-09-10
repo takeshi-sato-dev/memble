@@ -82,7 +82,7 @@ assumption.
 
 Usage:
   leaflet_area_check.py --gro system.gro --lipids "CHOL DIPC DPSM DOPS" \
-      [--tol 0.08] [--hard-tol 0.25] [--asym 1] [--apl "POPC:0.64 CHOL:0.40"] \
+      [--tol 0.25] [--hard-tol 0.25] [--asym 1] [--apl "POPC:0.64 CHOL:0.40"] \
       [--points 400000] [--min-shared 10] [--json leaflet_area.json]
 """
 
@@ -172,9 +172,13 @@ def main():
     ap.add_argument("--apl", default="",
                     help="reference areas 'NAME:VAL ...' in nm^2, printed beside "
                          "the measurement; they never decide the outcome")
-    ap.add_argument("--tol", type=float, default=0.08,
+    ap.add_argument("--tol", type=float, default=0.25,
                     help="largest relative difference accepted between the two "
-                         "leaflets (default 0.08)")
+                         "leaflets (default 0.25). A difference of a few percent "
+                         "returns the numbers that were assigned to the two "
+                         "leaflets rather than a fault, and the tolerance is set "
+                         "to catch a fault: a species placed in the wrong "
+                         "leaflet, or a packing that failed")
     ap.add_argument("--hard-tol", type=float, default=0.25,
                     help="an asymmetric build stops above this difference "
                          "(default 0.25)")

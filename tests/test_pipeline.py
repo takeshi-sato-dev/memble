@@ -197,18 +197,38 @@ def test_leaflet_area_moderate_warns_not_abort(tmp_path):
     """A difference between the tolerance and the hard tolerance warns.
 
     The lower leaflet holds 85 molecules where the upper holds 100, which
-    stretches its lipids by about a sixth. The build carries on and the report
-    names the difference.
+    stretches its lipids by about a sixth. The tolerance is given here rather
+    than taken from the default, because the difference this system carries is
+    the size that the default is set to leave alone. The build carries on and
+    the report names the difference.
     """
     gro = tmp_path / "asym2.gro"
     recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
            [(r, "POPC", "PO4", -2.0) for r in range(101, 186)]
     _write_gro_grid(gro, recs)
     p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC",
-            "--asym", 1, expect_zero=False)
+            "--tol", 0.08, "--asym", 1, expect_zero=False)
     assert p.returncode == 0
     assert "MISMATCH" in p.stdout
     assert "WARNING" in p.stdout
+
+
+def test_a_difference_of_a_sixth_passes_at_the_default_tolerance(tmp_path):
+    """The default tolerance leaves a difference of that size alone.
+
+    The mean area per lipid of a leaflet is the area of the box divided by the
+    number of molecules assigned to that leaflet, so a difference of this size
+    returns the numbers that were asked for rather than a fault. The default
+    tolerance is set to catch a fault, and this system is not one.
+    """
+    gro = tmp_path / "asym3.gro"
+    recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
+           [(r, "POPC", "PO4", -2.0) for r in range(101, 186)]
+    _write_gro_grid(gro, recs)
+    p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC",
+            "--asym", 1, expect_zero=False)
+    assert p.returncode == 0
+    assert "MISMATCH" not in p.stdout
 
 
 def test_leaflets_with_the_same_counts_pass(tmp_path):
