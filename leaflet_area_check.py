@@ -249,9 +249,12 @@ def main():
             unplaced.append((key2lp[rn], x, y, float(np.mean(xyz[idx, 2]))))
 
     if not placed:
-        sys.exit("ERROR: no lipid in %s carries a head bead the script knows "
-                 "(%s), so the leaflets cannot be read from the molecules."
-                 % (args.gro, " ".join(HEAD_PRIORITY)))
+        # A lipid of one bead, or one whose every bead is a head bead, carries
+        # no direction of its own. Where no molecule carries one, every molecule
+        # is placed against the midplane instead.
+        print("NOTE: no lipid in this system carries both a head bead and a "
+              "bead outside the head, so the leaflets are read from the "
+              "midplane rather than from the molecules.")
 
     # The midplane is the midpoint between the head beads of the two leaflets,
     # which the assignment above has already settled. It places the molecules
