@@ -76,9 +76,22 @@ COBY_PUSH=${COBY_PUSH:-1.0}             # COBY lipid-lipid push multiplier (defa
 # geometry / thermodynamics
 N_COPY=${N_COPY:-4}; SPACING_NM=${SPACING_NM:-20}; MARGIN_NM=${MARGIN_NM:-8}
 WATER_NM=${WATER_NM:-3.0}; MEMB_THICK_NM=${MEMB_THICK_NM:-4.0}; TEMP=${TEMP:-310}
-AREA_TOL=${AREA_TOL:-0.08}; APL_OVERRIDE=${APL_OVERRIDE:-}   # leaflet area pre-check
+# The leaflet area measurement is reported for every build and stops a build only
+# where the difference is too large to come from the packing. The mean area per
+# lipid of a leaflet is the area of the box, less the area the protein occupies
+# in that leaflet, divided by the number of molecules assigned to that leaflet,
+# so a difference of a few percent returns the numbers that were assigned rather
+# than a fault. A difference of tens of percent does report a fault: a species
+# placed in the wrong leaflet, or a packing that failed. AREA_TOL is set to catch
+# the second and to leave the first alone.
+AREA_TOL=${AREA_TOL:-0.25}; APL_OVERRIDE=${APL_OVERRIDE:-}   # leaflet area pre-check
 AUTO_BALANCE=${AUTO_BALANCE:-1}   # auto per-leaflet apl so asymmetric leaflets match in area
 AREA_HARD_TOL=${AREA_HARD_TOL:-0.25}   # abort an asymmetric build only above this mismatch
+# The pass that rebuilds from the area measurement is off. Correcting the counts
+# from that measurement moves them toward equal areas per lipid, which is the
+# build the area measurement scores best and the membrane agrees with least.
+# MEMBLE_BALANCE_ITER=2 turns the pass back on.
+MEMBLE_BALANCE_ITER=${MEMBLE_BALANCE_ITER:-0}
 APL_TABLE=${APL_TABLE:-}          # optional "NAME:area ..." overrides for balancing
 SALT_M=${SALT_M:-0.15}
 # protein / sim
@@ -807,7 +820,7 @@ BALEOF
     else
       _IS_BEST=0
     fi
-    if [ "$_IS_BEST" = 1 ] && [ "$_OK" = 1 ] && [ "$_ITER" -lt "${MEMBLE_BALANCE_ITER:-2}" ]; then
+    if [ "$_IS_BEST" = 1 ] && [ "$_OK" = 1 ] && [ "$_ITER" -lt "${MEMBLE_BALANCE_ITER:-0}" ]; then
       echo ""
       echo ">>> balance pass $((_ITER + 1)): the leaflets differ by ${_WS}%, above the"
       echo "    tolerance of $(awk -v x="${MEMBLE_BALANCE_TOL:-$AREA_TOL}" 'BEGIN{printf "%.1f", 100*x}')% and above twice the standard error of $(awk -v x="$_WE" 'BEGIN{printf "%.1f", 100*x}')%."
