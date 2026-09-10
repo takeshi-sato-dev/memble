@@ -1126,6 +1126,11 @@ cat > run.sh <<RUNEOF
 #!/usr/bin/env bash
 set -eo pipefail
 GMX="$GMX"
+# One thread-MPI rank and NT OpenMP threads. A system of this size needs no
+# domain decomposition, and GROMACS otherwise takes one rank per GPU it can see,
+# which stops the run on a machine that carries more than one. Set NT to the
+# number of cores to use:  NT=16 bash run.sh
+NT=\${NT:-8}
 # GROMACS dumps step<N>b.pdb when atoms move too far (system blowing up).
 # set -e misses a run that "succeeds" while melting, so check explicitly.
 check_blowup(){ if ls step*[0-9]b.pdb >/dev/null 2>&1; then
@@ -1133,13 +1138,13 @@ check_blowup(){ if ls step*[0-9]b.pdb >/dev/null 2>&1; then
   echo "  The membrane is blowing up. Inspect: clashes (EM max force), box too small,"
   echo "  or asymmetric leaflet area mismatch. Do not continue."; exit 1; fi; }
 \$GMX grompp -f step6.0_minimization.mdp -c system.gro -p system.top -o step6.0.tpr -maxwarn 10
-\$GMX mdrun -deffnm step6.0 -v
+\$GMX mdrun -deffnm step6.0 -v -ntmpi 1 -ntomp \$NT
 grep -i "Maximum force" step6.0.log | tail -1 || true   # should be finite, not astronomical
 check_blowup step6.0
 prev=step6.0
 for k in 1 2 3 4 5 6; do
   \$GMX grompp -f step6.\${k}_equilibration.mdp -c \${prev}.gro -r step6.0.gro -p system.top -n index.ndx -o step6.\${k}.tpr -maxwarn 10
-  \$GMX mdrun -deffnm step6.\${k} -v
+  \$GMX mdrun -deffnm step6.\${k} -v -ntmpi 1 -ntomp \$NT
   check_blowup step6.\${k}
   prev=step6.\${k}
 done
@@ -1159,7 +1164,7 @@ if [ -f "$_HELPDIR/check_equilibration.py" ]; then
   fi
 fi
 \$GMX grompp -f step7_production.mdp -c \${prev}.gro -p system.top -n index.ndx -o step7.tpr -maxwarn 10
-\$GMX mdrun -deffnm step7 -v
+\$GMX mdrun -deffnm step7 -v -ntmpi 1 -ntomp \$NT
 check_blowup step7
 echo "DONE: step7.xtc"
 RUNEOF
