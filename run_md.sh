@@ -60,13 +60,30 @@ run_stage() {
   [ -f "$mdp" ]        || { echo "!! missing mdp: $mdp"; exit 1; }
   [ -f "${prev}.gro" ] || { echo "!! missing input coords: ${prev}.gro (run the previous stage first)"; exit 1; }
 
+  # A stage whose coordinates are already written is left as it stands, and a
+  # stage that was stopped partway continues from the checkpoint GROMACS wrote,
+  # so a run that was interrupted is picked up by starting this script again.
+  # REDO=1 runs the stage from the beginning.
+  if [ -f "${out}.gro" ] && [ "${REDO:-0}" != "1" ]; then
+    echo ""
+    echo ">>>>>> STAGE $S was already finished (${out}.gro); left as it stands <<<<<<"
+    return 0
+  fi
+
   echo ""
   echo "==================================================================="
   echo "  STAGE $S   ($mdp  <-  ${prev}.gro)"
   echo "==================================================================="
-  $GMX grompp -f "$mdp" -o "${out}.tpr" -c "${prev}.gro" -r "${ref}.gro" \
-       -p system.top -n index.ndx -maxwarn "$MAXWARN"
-  $GMX mdrun -deffnm "$out" -v -ntmpi 1 -ntomp "$NT"
+  if [ ! -f "${out}.tpr" ] || [ "${REDO:-0}" = "1" ]; then
+    $GMX grompp -f "$mdp" -o "${out}.tpr" -c "${prev}.gro" -r "${ref}.gro" \
+         -p system.top -n index.ndx -maxwarn "$MAXWARN"
+  fi
+  if [ -f "${out}.cpt" ] && [ "${REDO:-0}" != "1" ]; then
+    echo "  continuing from ${out}.cpt"
+    $GMX mdrun -deffnm "$out" -v -ntmpi 1 -ntomp "$NT" -cpi "${out}.cpt" -append
+  else
+    $GMX mdrun -deffnm "$out" -v -ntmpi 1 -ntomp "$NT"
+  fi
 
   if [ -f "${out}.gro" ]; then
     local warn=0

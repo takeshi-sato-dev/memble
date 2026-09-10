@@ -1137,15 +1137,35 @@ check_blowup(){ if ls step*[0-9]b.pdb >/dev/null 2>&1; then
   echo "INSTABILITY during \$1: GROMACS wrote step*b.pdb (atoms moving too far)."
   echo "  The membrane is blowing up. Inspect: clashes (EM max force), box too small,"
   echo "  or asymmetric leaflet area mismatch. Do not continue."; exit 1; fi; }
-\$GMX grompp -f step6.0_minimization.mdp -c system.gro -p system.top -o step6.0.tpr -maxwarn 10
-\$GMX mdrun -deffnm step6.0 -v -ntmpi 1 -ntomp \$NT
+# A stage whose coordinates are already written is left as it stands, and a
+# stage that was stopped partway continues from the checkpoint GROMACS wrote,
+# so a run that was interrupted is picked up by starting this script again.
+# REDO=1 runs every stage from the beginning:  REDO=1 bash run.sh
+stage(){   # stage <name> <mdp> <start.gro> [restraint.gro]
+  out=\$1; mdp=\$2; start=\$3; restr=\${4:-}; nx=""
+  [ -f index.ndx ] && nx="-n index.ndx"
+  if [ -f "\$out.gro" ] && [ "\${REDO:-0}" != "1" ]; then
+    echo ">>> \$out was already finished"; return 0; fi
+  if [ ! -f "\$out.tpr" ] || [ "\${REDO:-0}" = "1" ]; then
+    if [ -n "\$restr" ]; then
+      \$GMX grompp -f "\$mdp" -c "\$start" -r "\$restr" -p system.top \$nx -o "\$out.tpr" -maxwarn 10
+    else
+      \$GMX grompp -f "\$mdp" -c "\$start" -p system.top \$nx -o "\$out.tpr" -maxwarn 10
+    fi
+  fi
+  if [ -f "\$out.cpt" ] && [ "\${REDO:-0}" != "1" ]; then
+    echo ">>> \$out continues from the checkpoint it left"
+    \$GMX mdrun -deffnm "\$out" -v -ntmpi 1 -ntomp \$NT -cpi "\$out.cpt" -append
+  else
+    \$GMX mdrun -deffnm "\$out" -v -ntmpi 1 -ntomp \$NT
+  fi
+  check_blowup "\$out"
+}
+stage step6.0 step6.0_minimization.mdp system.gro
 grep -i "Maximum force" step6.0.log | tail -1 || true   # should be finite, not astronomical
-check_blowup step6.0
 prev=step6.0
 for k in 1 2 3 4 5 6; do
-  \$GMX grompp -f step6.\${k}_equilibration.mdp -c \${prev}.gro -r step6.0.gro -p system.top -n index.ndx -o step6.\${k}.tpr -maxwarn 10
-  \$GMX mdrun -deffnm step6.\${k} -v -ntmpi 1 -ntomp \$NT
-  check_blowup step6.\${k}
+  stage step6.\${k} step6.\${k}_equilibration.mdp \${prev}.gro step6.0.gro
   prev=step6.\${k}
 done
 # The last equilibration stage is read before the production run starts. A
@@ -1163,9 +1183,7 @@ if [ -f "$_HELPDIR/check_equilibration.py" ]; then
     fi
   fi
 fi
-\$GMX grompp -f step7_production.mdp -c \${prev}.gro -p system.top -n index.ndx -o step7.tpr -maxwarn 10
-\$GMX mdrun -deffnm step7 -v -ntmpi 1 -ntomp \$NT
-check_blowup step7
+stage step7 step7_production.mdp \${prev}.gro
 echo "DONE: step7.xtc"
 RUNEOF
 chmod +x run.sh
@@ -1224,6 +1242,12 @@ cat > md_steps.txt <<'MDEOF'
    - mdrun is run single-rank (-ntmpi 1 -ntomp 8) to avoid domain-decomposition
      errors from the protein elastic network. Change the -ntomp number to match
      your core count (find it with:  sysctl -n hw.ncpu  or  nproc).
+   - A stage that was stopped partway leaves a checkpoint file, <name>.cpt.
+     Continue it by adding  -cpi <name>.cpt -append  to that stage's mdrun line
+     and running the line again. The grompp line is not run a second time.
+     Example, for a production run that was stopped:
+       gmx mdrun -deffnm step7_production -v -ntmpi 1 -ntomp 8 \
+         -cpi step7_production.cpt -append
  Layout: step6.0 = minimization, step6.1..6.6 = equilibration (restraints are
          released in stages), step7 = production.
  Run everything inside the build output directory  memble_work/ .

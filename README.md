@@ -287,6 +287,36 @@ To give one run one card, name the card as well:
 CUDA_VISIBLE_DEVICES=0 NT=16 bash run.sh
 ```
 
+### Stopping a run and picking it up again
+
+A production run of a membrane protein system takes days, and a machine is
+stopped, rebooted or preempted inside that. GROMACS writes a checkpoint file
+while it runs, `<stage>.cpt`, and the scripts memble writes read it. Start the
+same script again in the same directory:
+
+```
+bash run.sh                  # or: bash run_md.sh
+```
+
+A stage whose coordinates are already written is left as it stands, a stage
+that was cut off continues from its checkpoint, and the trajectory and energy
+files are appended to rather than replaced, so the run that comes out is the
+run that would have come out uninterrupted. `REDO=1` runs every stage again
+from the beginning:
+
+```
+REDO=1 bash run.sh
+```
+
+When the stages are copy-pasted from `md_steps.txt` instead, add `-cpi` and
+`-append` to the mdrun line of the stage that stopped, and do not run its
+grompp line a second time:
+
+```
+gmx mdrun -deffnm step7_production -v -ntmpi 1 -ntomp 8 \
+  -cpi step7_production.cpt -append
+```
+
 ## Tests
 
 ```
