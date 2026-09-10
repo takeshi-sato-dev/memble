@@ -25,9 +25,15 @@ table of areas per lipid is read, and no area is assumed.
 
 WHAT IS CHECKED
 
-  1. A lipid that is present in both leaflets is measured in both. The two
+  1. A lipid that both leaflets hold in numbers is measured in both. The two
      values agree in a matched bilayer, and they differ when one leaflet holds
      too few lipids for its area. This check reads nothing but the built system.
+     A species that one leaflet holds in numbers and the other holds a handful
+     of is not compared, because a mean taken over a handful of molecules
+     carries a standard error of tens of percent and because a lipid surrounded
+     by species it does not share the leaflet with reports its neighbors rather
+     than the tension. Such a species is printed and written to the report, and
+     it decides nothing.
   2. A reference area supplied with --apl is printed beside the measurement. The
      two are different quantities, because a Voronoi region divides the whole
      plane while an area per lipid counts lipids into the area of the box, so
@@ -55,16 +61,29 @@ convention gives the same sterol. The two are different quantities and they are
 not compared here. What the check uses is the comparison of one lipid against
 itself in the other leaflet, and that comparison is unaffected.
 
+HOW A LIPID IS GIVEN ITS LEAFLET
+
+The leaflet of a lipid is read from the lipid. A lipid points out of the leaflet
+it belongs to, so the head bead of a lipid in the upper leaflet lies above the
+rest of that same molecule, and the head bead of a lipid in the lower leaflet
+lies below it. The head bead is the phosphate of a phospholipid and the hydroxyl
+of a sterol. Comparing each molecule against a plane drawn through the whole
+bilayer gives a different answer, and a worse one: the plane has to be placed,
+the mean z of every lipid bead places it toward whichever leaflet holds more
+beads, and a bilayer that holds a protein is not flat, so a lipid in a region
+the protein depresses sits below a plane its own leaflet rises above.
+
 WHAT IS ASSUMED
 
-The bilayer is treated as flat, and the areas are projected on the xy plane. A
-buckled or strongly curved membrane is outside what this script measures, and
-the report says so. A freshly built system is flat by construction.
+The areas are projected on the xy plane, so a buckled or strongly curved
+membrane is outside what this script measures and the report says so. A freshly
+built system is flat by construction. The leaflet assignment above needs no such
+assumption.
 
 Usage:
   leaflet_area_check.py --gro system.gro --lipids "CHOL DIPC DPSM DOPS" \
       [--tol 0.08] [--hard-tol 0.25] [--asym 1] [--apl "POPC:0.64 CHOL:0.40"] \
-      [--points 400000] [--json leaflet_area.json]
+      [--points 400000] [--min-shared 10] [--json leaflet_area.json]
 """
 
 import argparse
@@ -96,6 +115,22 @@ def read_gro(path):
 def gro_key(name):
     """The GRO residue field is five characters, so POP2_45 is written POP2_."""
     return name[:5]
+
+
+def head_of(idx, aname):
+    """The beads of one molecule that lie at its head, in order of preference.
+
+    The first name in HEAD_PRIORITY that the molecule carries wins, so a
+    phospholipid is read from its phosphate, a sterol from its hydroxyl, and a
+    lipid that carries neither from its glycerol or its headgroup bead. A
+    molecule that carries none of them returns nothing, and it is placed by the
+    midplane of the molecules that were placed.
+    """
+    for h in HEAD_PRIORITY:
+        sel = [int(i) for i in idx if aname[i] == h]
+        if sel:
+            return sel
+    return []
 
 
 def mc_areas(points_xy, box_xy, n_points, seed=0, chunk=20000):
@@ -146,6 +181,13 @@ def main():
     ap.add_argument("--asym", type=int, default=0, help="1 for an asymmetric build")
     ap.add_argument("--points", type=int, default=400000,
                     help="Monte Carlo throws per leaflet (default 400000)")
+    ap.add_argument("--min-shared", type=int, default=10,
+                    help="molecules of one species a leaflet has to hold before "
+                         "that species is compared against the other leaflet "
+                         "(default 10)")
+    ap.add_argument("--min-shared-ratio", type=float, default=0.2,
+                    help="smallest ratio of the two counts of one species "
+                         "accepted for the comparison (default 0.2)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", default="", help="write the measurement to this file")
     args = ap.parse_args()
@@ -184,26 +226,53 @@ def main():
     for i in np.nonzero(is_lipid)[0]:
         mol_beads[(int(resid[i]), resn[i])].append(i)
 
-    # The midplane is the mean z of every lipid bead. A head bead per species
-    # would need a table, and a sterol has no phosphate: its hydroxyl sits well
-    # below the phosphate plane, so a mean taken over the two is a height at
-    # which nothing lies. The tails dominate the bead count and they are centered
-    # on the midplane.
-    mid = float(np.mean(xyz[is_lipid, 2]))
-
-    mols = []          # (species, leaflet, x, y)
+    # The leaflet of a lipid is read from the lipid: the head bead of a lipid in
+    # the upper leaflet lies above the rest of that same molecule. No plane is
+    # drawn through the bilayer, so no lipid is carried across a plane that the
+    # protein, or the difference between the two leaflets, has moved under it.
+    placed = []        # (species, upper, x, y, z_head)
+    unplaced = []      # (species, x, y, z_mol)
     for (rid, rn), idx in mol_beads.items():
-        z = float(np.mean(xyz[idx, 2]))
-        leaf = "upper" if z >= mid else "lower"
         # The centroid in the membrane plane is the reference point. It needs no
         # per-lipid choice of atom, so a lipid the script has never seen is
         # measured on the same footing as a familiar one.
         p = xyz[idx, :2]
         ref_xy = p[0] + np.mean(((p - p[0]) + box_xy / 2.0) % box_xy - box_xy / 2.0,
                                 axis=0)
-        mols.append((key2lp[rn], leaf, float(ref_xy[0]), float(ref_xy[1])))
+        x, y = float(ref_xy[0]), float(ref_xy[1])
+        h = head_of(idx, aname)
+        b = [int(i) for i in idx if i not in set(h)]
+        if h and b:
+            zh = float(np.mean(xyz[h, 2]))
+            placed.append((key2lp[rn], zh > float(np.mean(xyz[b, 2])), x, y, zh))
+        else:
+            unplaced.append((key2lp[rn], x, y, float(np.mean(xyz[idx, 2]))))
+
+    if not placed:
+        sys.exit("ERROR: no lipid in %s carries a head bead the script knows "
+                 "(%s), so the leaflets cannot be read from the molecules."
+                 % (args.gro, " ".join(HEAD_PRIORITY)))
+
+    # The midplane is the midpoint between the head beads of the two leaflets,
+    # which the assignment above has already settled. It places the molecules
+    # that carry no head bead, and it divides the protein beads between the
+    # leaflets.
+    zu = [m[4] for m in placed if m[1]]
+    zl = [m[4] for m in placed if not m[1]]
+    if zu and zl:
+        mid = 0.5 * (float(np.mean(zu)) + float(np.mean(zl)))
+    else:
+        mid = float(np.mean(xyz[is_lipid, 2]))
+
+    mols = []          # (species, leaflet, x, y)
+    for s, up, x, y, _z in placed:
+        mols.append((s, "upper" if up else "lower", x, y))
+    for s, x, y, z in unplaced:
+        mols.append((s, "upper" if z >= mid else "lower", x, y))
 
     out = {"box_nm": [float(v) for v in box], "midplane_nm": mid,
+           "n_placed_by_molecule": len(placed),
+           "n_placed_by_midplane": len(unplaced),
            "method": "Monte Carlo integration of the planar Voronoi regions",
            "assumes": "a flat bilayer; areas are projected on the xy plane",
            "leaflets": {}}
@@ -250,22 +319,42 @@ def main():
             print("    %-8s n=%-5d Voronoi area %.3f +/- %.3f nm^2 (sd %.3f)"
                   % (s, v["n"], v["apl_nm2"], v["se_nm2"], v["sd_nm2"]))
 
-    # --- check 1: a species in both leaflets is measured in both -------------
-    shared = []
+    # --- check 1: a species both leaflets hold in numbers is measured in both -
+    # A species that one leaflet holds in numbers and the other holds a handful
+    # of is set aside. Two things make such a comparison meaningless. The mean
+    # area of eight molecules carries a standard error of tens of percent, and
+    # eight molecules of a species that belongs to the other leaflet sit among
+    # neighbors they do not share the leaflet with, so their area reports the
+    # neighbors. Both the tolerance and the correction that follows from it read
+    # the largest difference among the compared species, so one such species
+    # would decide the build on its own.
+    shared, aside = [], []
     if "upper" in per_leaf_species and "lower" in per_leaf_species:
         for s in per_leaf_species["upper"]:
-            if s in per_leaf_species["lower"]:
-                A = per_leaf_species["upper"][s]
-                B = per_leaf_species["lower"][s]
-                a, b = A["apl_nm2"], B["apl_nm2"]
-                mean = (a + b) / 2.0
-                if mean > 0:
-                    se = float(np.hypot(A["se_nm2"], B["se_nm2"]))
-                    shared.append((s, a, b, abs(a - b) / mean,
-                                   se / mean if mean else float("inf")))
-    # How much of each leaflet is made of lipids that both leaflets hold.
-    shared_names = set(per_leaf_species.get("upper", {})) & set(
-        per_leaf_species.get("lower", {}))
+            if s not in per_leaf_species["lower"]:
+                continue
+            A = per_leaf_species["upper"][s]
+            B = per_leaf_species["lower"][s]
+            a, b = A["apl_nm2"], B["apl_nm2"]
+            mean = (a + b) / 2.0
+            if mean <= 0:
+                continue
+            nu, nl = A["n"], B["n"]
+            se = float(np.hypot(A["se_nm2"], B["se_nm2"]))
+            row = (s, a, b, abs(a - b) / mean, se / mean)
+            if min(nu, nl) < args.min_shared:
+                aside.append((row, nu, nl, "one leaflet holds fewer than %d of "
+                                           "them" % args.min_shared))
+            elif min(nu, nl) < args.min_shared_ratio * max(nu, nl):
+                aside.append((row, nu, nl, "one leaflet holds fewer than %.0f%% "
+                                           "as many of them as the other"
+                                           % (100 * args.min_shared_ratio)))
+            else:
+                shared.append(row)
+
+    # How much of each leaflet is made of lipids that both leaflets hold in
+    # numbers. A species set aside above is not one of them.
+    shared_names = set(r[0] for r in shared)
     overlap = []
     for leaf, sp in per_leaf_species.items():
         tot = sum(v["n"] for v in sp.values())
@@ -278,6 +367,11 @@ def main():
                               "relative_difference": round(d, 4),
                               "relative_standard_error": round(e, 4)}
                              for s, a, b, d, e in shared]
+    out["not_compared"] = [{"lipid": r[0], "upper_nm2": r[1], "lower_nm2": r[2],
+                            "relative_difference": round(r[3], 4),
+                            "relative_standard_error": round(r[4], 4),
+                            "n_upper": nu, "n_lower": nl, "reason": why}
+                           for r, nu, nl, why in aside]
 
     # A difference is read against the scatter that produced it. With a few tens
     # of molecules of one lipid in a leaflet the mean area carries a standard
@@ -288,6 +382,9 @@ def main():
               "(standard error %.1f%%)" % (s, a, b, 100 * d, 100 * e))
         if d > worst:
             worst, worst_s, worst_e = d, s, e
+    for (s, a, b, d, e), nu, nl, why in aside:
+        print("  %-8s upper %.3f nm^2 (n=%d), lower %.3f nm^2 (n=%d): not "
+              "compared, because %s." % (s, a, nu, b, nl, why))
 
     # --- a reference, printed for the reader and used for nothing else -------
     ref_dev = []
@@ -307,9 +404,16 @@ def main():
     if not shared:
         out["result"] = "REPORTED"
         print("")
-        print("NOTE: no lipid is present in both leaflets, so the leaflets cannot "
-              "be compared against each other. The measured areas above are "
-              "reported and the build continues.")
+        if aside:
+            print("NOTE: no lipid is held by both leaflets in numbers, so the "
+                  "leaflets cannot be compared against each other. The species "
+                  "set aside above are held by one leaflet and by a handful of "
+                  "molecules of the other. The measured areas are reported and "
+                  "the build continues.")
+        else:
+            print("NOTE: no lipid is present in both leaflets, so the leaflets "
+                  "cannot be compared against each other. The measured areas "
+                  "above are reported and the build continues.")
         print("      To have this checked, give a reference with --apl, or put one "
               "lipid in both leaflets.")
     elif worst > args.tol and worst > 2.0 * worst_e and shared_fraction < 0.5:
