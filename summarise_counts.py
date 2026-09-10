@@ -53,27 +53,35 @@ def main():
             continue
         moved, dth, dop = [], [], []
         for _, r in runs[arm]:
+            # Every quantity keeps its sign. Which leaflet gave up sterol, and
+            # which leaflet ended thinner, is what separates one way of setting
+            # the numbers from another, and an absolute value would discard it.
+            # An absolute value would also report a run that did nothing as
+            # having done something, because it turns the scatter of a
+            # measurement centered on zero into a positive mean.
             if sterol:
-                moved.append(abs(r["between_leaflets"][sterol]["moved"]))
+                moved.append(r["between_leaflets"][sterol]["moved"])
             t = r["leaflet_thickness_nm"]
-            dth.append(abs(t["upper"]["settled"] - t["lower"]["settled"]))
+            dth.append(t["upper"]["settled"] - t["lower"]["settled"])
             o = r["tail_order"]
-            dop.append(abs(o["upper"]["settled"] - o["lower"]["settled"]))
+            dop.append(o["upper"]["settled"] - o["lower"]["settled"])
         rows[arm] = dict(moved=mean_sem(moved) if moved else (float("nan"),) * 2,
                          thickness=mean_sem(dth), order=mean_sem(dop),
                          n=len(runs[arm]))
         r = rows[arm]
-        print("%-28s %8d %5.1f+-%3.1f %5.3f+-%5.3f %5.3f+-%5.3f"
+        print("%-28s %8d %+5.1f+-%3.1f %+6.3f+-%5.3f %+6.3f+-%5.3f"
               % (ARM_LABEL.get(arm, arm), r["n"],
                  r["moved"][0], r["moved"][1],
                  r["thickness"][0], r["thickness"][1],
                  r["order"][0], r["order"][1]))
     print("-" * 70)
-    print("sterol moved: molecules that changed leaflet between the start and")
-    print("  the second half of the run. thickness: the difference between the")
-    print("  two leaflets, in nm. order: the difference in the tail order")
-    print("  parameter between the two leaflets. Each is an absolute value,")
-    print("  averaged over the runs of the arm, with the standard error.")
+    print("sterol moved: the change in the number of sterol molecules the upper")
+    print("  leaflet holds, between the start of the production run and its")
+    print("  second half. thickness: upper minus lower, in nm. order: upper")
+    print("  minus lower, in the tail order parameter. Each is averaged over")
+    print("  the runs of the arm, with the standard error, and each keeps its")
+    print("  sign: a positive sterol figure means the upper leaflet took")
+    print("  molecules from the lower one.")
 
     with open(os.path.join(d, "counts_summary.json"), "w") as fh:
         json.dump(rows, fh, indent=1)
