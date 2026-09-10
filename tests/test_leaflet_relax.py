@@ -1,9 +1,11 @@
-"""The leaflet a lipid belongs to, and the plane the two leaflets are measured from.
+"""The leaflet a lipid belongs to, and the plane its thickness is measured from.
 
 leaflet_relax.py reports how many molecules of each species changed leaflet
-during a run, and how thick each leaflet is. Both rest on one plane. These tests
-build bilayers whose leaflets are known by construction and check that the plane
-the script finds is the plane that separates them.
+during a run, and how thick each leaflet is. These tests build bilayers whose
+leaflets are known by construction, and hand the script the cases that a
+bilayer with a protein in it produces: leaflets of unequal composition, a lipid
+whose head beads outnumber its tail beads, a sterol that carries no phosphate,
+and a leaflet that is not flat.
 """
 import subprocess
 import sys
@@ -26,19 +28,26 @@ STEROL = [("ROH", 0.0), ("R1", 0.3), ("R2", 0.6), ("C1", 0.9), ("C2", 1.2)]
 
 
 def _bilayer(tmp_path, upper, lower, head_z=2.0, n_frames=3):
-    """A flat bilayer. upper and lower are lists of (residue name, bead list)."""
+    """A bilayer.
+
+    upper and lower are lists of (residue name, bead list), or of (residue
+    name, bead list, offset) where offset moves that one molecule along z, so
+    that a leaflet can be given a dimple.
+    """
     top = md.Topology()
     ch = top.add_chain()
     xyz = []
     # dz runs from the head bead toward the tail, so the upper leaflet has its
     # head at +head_z and its tails below it, and the lower leaflet the reverse.
     for side, sign, leaflet in (("u", +1.0, upper), ("l", -1.0, lower)):
-        for i, (name, beads) in enumerate(leaflet):
+        for i, entry in enumerate(leaflet):
+            name, beads = entry[0], entry[1]
+            off = entry[2] if len(entry) > 2 else 0.0
             r = top.add_residue(name, ch)
             for bead, dz in beads:
                 top.add_atom(bead, md.element.carbon, r)
                 xyz.append([0.5 * i, 0.0 if side == "u" else 1.0,
-                            sign * head_z - sign * dz])
+                            sign * head_z - sign * dz + off])
     frames = np.repeat(np.array(xyz, dtype=np.float32)[None], n_frames, axis=0)
     t = md.Trajectory(frames, top)
     t.unitcell_lengths = np.tile([5.0, 5.0, 10.0], (n_frames, 1)).astype("f4")
@@ -113,3 +122,19 @@ def test_a_lipid_whose_beads_straddle_the_plane_is_placed_by_its_head(tmp_path):
     assert r["counts"]["POP2_"]["upper"][0] == 0
     # and it stays there for every frame, so nothing is reported as moved
     assert r["between_leaflets"]["POP2_"]["moved"] == pytest.approx(0.0)
+
+
+def test_a_lipid_in_a_dimple_stays_in_its_own_leaflet(tmp_path):
+    """A bilayer that holds a protein is not flat.
+
+    Two lipids of the upper leaflet are pushed 2.4 nm down, far enough that
+    their head beads fall below the midpoint of the two leaflets, and their
+    tails go down with them. Each still points out of the leaflet it belongs
+    to, and belongs to the upper leaflet.
+    """
+    up = [("DLPC", SHORT)] * 8 + [("DLPC", SHORT, -2.4)] * 2
+    lo = [("DPPC", LONG)] * 10
+    r = _run(*_bilayer(tmp_path, up, lo, head_z=2.0), tmp_path=tmp_path)
+    assert r["counts"]["DLPC"]["upper"][0] == 10
+    assert r["counts"]["DLPC"]["lower"][0] == 0
+    assert r["counts"]["DPPC"]["upper"][0] == 0

@@ -83,37 +83,41 @@ def main():
     z = t.xyz[:, :, 2]                                  # (frame, atom)
 
     # --- leaflet of every lipid in every frame ---------------------------
-    # The leaflet of a lipid is read from its head bead, the phosphate of a
-    # phospholipid and the hydroxyl of a sterol. Averaging the whole molecule
-    # instead puts a lipid with a long headgroup and short tails, such as a
-    # phosphoinositide, close to the midplane, and the leaflet it is assigned
-    # to then changes with the thermal motion of its tails rather than with
-    # the side of the bilayer it sits on.
-    ref = [heads[i] if len(heads[i]) else by_res[i] for i in range(len(res))]
-    zres = np.stack([z[:, idx].mean(axis=1) for idx in ref], axis=1)
+    # A lipid points out of the leaflet it belongs to, so the leaflet is read
+    # from the molecule itself: the head bead of a lipid in the upper leaflet
+    # lies above the rest of that same molecule, and the head bead of a lipid
+    # in the lower leaflet lies below it. The head bead is the phosphate of a
+    # phospholipid and the hydroxyl of a sterol, and the rest of the molecule
+    # is every other bead it carries.
+    #
+    # Comparing each lipid against a plane drawn through the whole bilayer
+    # gives a different answer, and a worse one, for two reasons. The plane has
+    # to be placed, and the mean z of every lipid bead does not place it: the
+    # two leaflets of an asymmetric bilayer hold different numbers of beads, so
+    # that mean sits toward the leaflet that holds more of them and moves as the
+    # bilayer relaxes, which carries lipids across a plane that moved under
+    # them. And a bilayer that holds a protein is not flat, so a lipid in a
+    # region that the protein depresses sits below a plane its own leaflet
+    # rises above. Reading the molecule needs no plane at all.
+    head_idx = [heads[i] if len(heads[i]) else by_res[i] for i in range(len(res))]
+    body_idx = []
+    for i in range(len(res)):
+        h = set(int(x) for x in head_idx[i])
+        b = np.array([int(x) for x in by_res[i] if int(x) not in h])
+        body_idx.append(b if b.size else head_idx[i])
 
-    # The dividing plane is the midpoint between the head beads of the two
-    # leaflets, and each frame is solved for the plane that its own assignment
-    # implies. The mean z of every lipid bead is not that plane. The two
-    # leaflets of an asymmetric bilayer hold different numbers of beads, so
-    # that mean sits toward the leaflet that holds more of them, and it moves
-    # as the bilayer relaxes. Lipids then cross a plane that moved under them,
-    # and the crossing is counted as a change of leaflet that never happened.
+    zhead = np.stack([z[:, idx].mean(axis=1) for idx in head_idx], axis=1)
+    zbody = np.stack([z[:, idx].mean(axis=1) for idx in body_idx], axis=1)
+    upper = zhead > zbody
+
+    # The thickness below is measured from a plane, and that plane is the
+    # midpoint between the head beads of the two leaflets, which the assignment
+    # above has already settled.
     mid = np.empty(t.n_frames)
-    upper = np.empty((t.n_frames, len(res)), dtype=bool)
     for f in range(t.n_frames):
-        m = float(z[f, lipid_atoms].mean())
-        for _ in range(50):
-            u = zres[f] > m
-            if u.all() or not u.any():
-                break
-            new = 0.5 * (zres[f][u].mean() + zres[f][~u].mean())
-            if abs(new - m) < 1.0e-6:
-                m = new
-                break
-            m = new
-        mid[f] = m
-        upper[f] = zres[f] > m
+        u = upper[f]
+        mid[f] = (0.5 * (zhead[f][u].mean() + zhead[f][~u].mean())
+                  if u.any() and (~u).any() else float(z[f, lipid_atoms].mean()))
 
     out = {"n_frames": int(t.n_frames), "n_lipids": len(res),
            "time_ps": [float(x) for x in t.time]}
