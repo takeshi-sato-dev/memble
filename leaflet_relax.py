@@ -81,11 +81,39 @@ def main():
     bonds = [tail_bonds(r) for r in res]
 
     z = t.xyz[:, :, 2]                                  # (frame, atom)
-    mid = z[:, lipid_atoms].mean(axis=1)                # the bilayer midplane
 
     # --- leaflet of every lipid in every frame ---------------------------
-    zres = np.stack([z[:, idx].mean(axis=1) for idx in by_res], axis=1)
-    upper = zres > mid[:, None]
+    # The leaflet of a lipid is read from its head bead, the phosphate of a
+    # phospholipid and the hydroxyl of a sterol. Averaging the whole molecule
+    # instead puts a lipid with a long headgroup and short tails, such as a
+    # phosphoinositide, close to the midplane, and the leaflet it is assigned
+    # to then changes with the thermal motion of its tails rather than with
+    # the side of the bilayer it sits on.
+    ref = [heads[i] if len(heads[i]) else by_res[i] for i in range(len(res))]
+    zres = np.stack([z[:, idx].mean(axis=1) for idx in ref], axis=1)
+
+    # The dividing plane is the midpoint between the head beads of the two
+    # leaflets, and each frame is solved for the plane that its own assignment
+    # implies. The mean z of every lipid bead is not that plane. The two
+    # leaflets of an asymmetric bilayer hold different numbers of beads, so
+    # that mean sits toward the leaflet that holds more of them, and it moves
+    # as the bilayer relaxes. Lipids then cross a plane that moved under them,
+    # and the crossing is counted as a change of leaflet that never happened.
+    mid = np.empty(t.n_frames)
+    upper = np.empty((t.n_frames, len(res)), dtype=bool)
+    for f in range(t.n_frames):
+        m = float(z[f, lipid_atoms].mean())
+        for _ in range(50):
+            u = zres[f] > m
+            if u.all() or not u.any():
+                break
+            new = 0.5 * (zres[f][u].mean() + zres[f][~u].mean())
+            if abs(new - m) < 1.0e-6:
+                m = new
+                break
+            m = new
+        mid[f] = m
+        upper[f] = zres[f] > m
 
     out = {"n_frames": int(t.n_frames), "n_lipids": len(res),
            "time_ps": [float(x) for x in t.time]}
