@@ -228,3 +228,72 @@ def test_the_repeats_of_a_point_are_averaged_into_that_point(tmp_path):
                        capture_output=True, text=True)
     assert p.returncode == 0, p.stderr + p.stdout
     assert "6 points" in p.stdout
+
+
+def _app():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("app", str(ROOT / "app.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)          # streamlit is imported inside pages
+    return mod
+
+
+def test_the_gui_reads_the_curve_backwards_like_the_command_line(tmp_path):
+    """Everything the command line does is on a page of the GUI, and the two
+    return the same numbers, because the page calls the same code."""
+    d = _curve_dir(tmp_path, CURVE_ROWS)
+    app = _app()
+    pts = app.curve_points(str(d))
+    assert len(pts) == 6
+    gui = app.curve_solution(pts, 60.0, 1937)
+    assert gui["ok"]
+
+    p = subprocess.run([sys.executable, str(SOLVE), str(d), "--target", "60",
+                        "--total-pl", "1937", "--emit-env"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr + p.stdout
+    env = dict(line.split("=", 1) for line in p.stdout.splitlines()
+               if re.match(r"^[A-Z_]+=", line))
+    assert gui["pl_upper"] == int(env["PL_UPPER"])
+    assert gui["pl_lower"] == int(env["PL_LOWER"])
+    assert abs(gui["imbalance"] - float(env["IMBALANCE_PCT"])) < 1e-3
+
+
+def test_the_gui_refuses_a_target_the_curve_does_not_reach(tmp_path):
+    """The refusal is a property of the measurement, not of the front end."""
+    d = _curve_dir(tmp_path, CURVE_ROWS)
+    app = _app()
+    sol = app.curve_solution(app.curve_points(str(d)), 85.0)
+    assert sol["ok"] is False
+    assert "does not reach" in sol["reason"]
+    assert "pl_upper" not in sol
+
+
+def test_the_gui_states_both_protocols_as_commands():
+    """A protocol whose runs take hours is handed over as a command line, and
+    the command has to name the steps in the order the protocol gives them."""
+    app = _app()
+    a = "\n".join(app.protocol_a_commands("/w", "prod.xtc", "/repo"))
+    assert "leaflet_relax.py" in a and "run_settled.sh" in a
+    assert a.index("leaflet_relax.py") < a.index("run_settled.sh")
+    b = "\n".join(app.protocol_b_commands("/out", "/repo"))
+    assert "run_curve.sh" in b and "solve_target.py" in b
+    assert b.index("run_curve.sh") < b.index("solve_target.py")
+
+
+def test_the_gui_shows_what_a_run_did_against_the_build(tmp_path):
+    """The settled table is read against system.top, not against the first
+    frame, and the page says which."""
+    d = tmp_path / "r.json"
+    d.write_text(json.dumps({
+        "between_leaflets": {
+            "CHOL": {"built": 71, "first_frame": 73, "settled": 79.0,
+                     "moved": 8.0, "baseline": "system.top"},
+            "DLPC": {"built": 70, "first_frame": 70, "settled": 70.0,
+                     "moved": 0.0, "baseline": "system.top"}}}))
+    app = _app()
+    rows = app.settled_rows(str(d))
+    chol = [r for r in rows if r["species"] == "CHOL"][0]
+    assert chol["built"] == 71
+    assert chol["moved"] == 8.0
+    assert chol["baseline"] == "system.top"

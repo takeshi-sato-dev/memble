@@ -17,6 +17,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+# solve_target.py and the other helpers sit beside this file. Streamlit runs
+# from wherever the user started it, so put that directory on the path here
+# rather than relying on the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 # ----------------------------------------------------------------------
 # Pure helpers (no Streamlit) so they can be unit tested.
 # ----------------------------------------------------------------------
@@ -141,11 +146,97 @@ def build_command(form, helpers_dir):
 # ----------------------------------------------------------------------
 # Streamlit UI
 # ----------------------------------------------------------------------
-def main():
+
+# ----------------------------------------------------------------------
+# Pure helpers for the two protocols (no Streamlit, so they are unit tested).
+# The command line and the GUI do the same things, and these are the things.
+# ----------------------------------------------------------------------
+def protocol_a_commands(work, xtc, repo, prod_ns=200):
+    """Protocol A. Run, count what settled, build again at those two numbers."""
+    return [
+        "cd %s" % work,
+        "# 1. run %d ns from the built system" % prod_ns,
+        "bash run_md.sh prod",
+        "# 2. count the sterol of each leaflet, frame by frame",
+        "python3 %s/leaflet_relax.py --gro system.gro --xtc %s \\" % (repo, xtc),
+        "    --last-fraction 0.4 --json settled.json",
+        "# 3. build again with the two numbers that run settled to",
+        "bash %s/run_settled.sh %s" % (repo, work),
+    ]
+
+
+def protocol_b_commands(out_dir, repo, deltas="-20 -12 -6 0 6 12",
+                        prod_ns=250, box_x=12, box_y=12):
+    """Protocol B. Measure the curve, then read it backwards at a target."""
+    return [
+        "# 1. build and run one system per point, %s nm box" % box_x,
+        "OUT=%s BOX_X=%s BOX_Y=%s DELTAS=\"%s\" PROD_NS=%d \\"
+        % (out_dir, box_x, box_y, deltas, prod_ns),
+        "    bash %s/run_curve.sh" % repo,
+        "# 2. print the points",
+        "python3 %s/curve_report.py %s/curve" % (repo, out_dir),
+        "# 3. read the curve backwards at the sterol share the study needs",
+        "python3 %s/solve_target.py %s/curve --target 64" % (repo, out_dir),
+    ]
+
+
+def curve_points(directory, prefix="relax_d", last_fraction=0.4):
+    """The measured points of a response curve, one row per delta."""
+    import solve_target
+    return solve_target.read_points(directory, prefix, last_fraction)
+
+
+def curve_solution(points, target, total_pl=0, degree=2):
+    """Read a measured curve backwards. Returns what the GUI has to show,
+    including the refusal when the target lies outside the measured range."""
+    import numpy as np
+    import solve_target
+    if len(points) < 2:
+        return {"ok": False, "reason": "fewer than two points"}
+    c, rms, worst = solve_target.fit(points, degree)
+    xs = [p["imbalance"] for p in points]
+    ys = [p["share"] for p in points]
+    lo, hi = min(xs), max(xs)
+    f, _ = solve_target.invert(c, target, lo, hi)
+    res = {"coefficients": [float(v) for v in c], "rms": rms, "worst": worst,
+           "imbalance_range": (lo, hi), "share_range": (min(ys), max(ys))}
+    if f is None:
+        res.update({"ok": False,
+                    "reason": "the curve does not reach %.2f%%; it covers "
+                              "%.2f%% to %.2f%%" % (target, min(ys), max(ys))})
+        return res
+    total = total_pl or (points[0]["pl_upper"] + points[0]["pl_lower"])
+    diff = f / 100.0 * total
+    res.update({"ok": True, "imbalance": f, "total_pl": total,
+                "pl_upper": int(round((total + diff) / 2.0)),
+                "pl_lower": int(round((total - diff) / 2.0))})
+    sd = [p["sd"] for p in points if p["sd"] is not None]
+    slope = float(np.polyval(np.polyder(c), f))
+    if sd and abs(slope) > 1e-6:
+        df = float(np.mean(sd)) / abs(slope)
+        res["imbalance_uncertainty"] = df
+        res["molecules_uncertainty"] = int(round(df / 100.0 * total))
+    return res
+
+
+def settled_rows(json_path):
+    """What a finished run did with the composition it was built with."""
+    import json
+    rec = json.load(open(json_path))
+    rows = []
+    for name, m in sorted(rec.get("between_leaflets", {}).items()):
+        rows.append({"species": name, "built": m.get("built"),
+                     "first frame": m.get("first_frame"),
+                     "settled": round(float(m["settled"]), 1),
+                     "moved": round(float(m["moved"]), 1),
+                     "baseline": m.get("baseline", "")})
+    return rows
+
+
+def build_page():
+    """Tab 1. Assemble a system and write the run files."""
     import streamlit as st
 
-    st.set_page_config(page_title="Martini 3 membrane builder", layout="wide")
-    st.title("Martini 3 membrane-protein system builder")
     st.caption("Martini 3 only. Builds CHARMM-GUI-equivalent inputs (GROMACS "
                "topology, PSF, CRD, staged equilibration) for arbitrary "
                "compositions, leaflet asymmetry, and peripheral partners.")
@@ -239,7 +330,7 @@ def main():
             n_copy = st.number_input("Protein copies (N_COPY)", 1, 64, 4)
         box_x = st.number_input("Box X nm (0 = auto)", 0.0, 200.0, 0.0)
         box_y = st.number_input("Box Y nm (0 = auto)", 0.0, 200.0, 0.0)
-        water_nm = st.number_input("Water per side nm (WATER_NM)", 1.0, 20.0, 2.5)
+        water_nm = st.number_input("Water per side nm (WATER_NM): the box height is the z span of the protein plus twice this", 1.0, 20.0, 1.5)
         memb_thick = st.number_input("Bilayer thickness nm (MEMB_THICK_NM)",
                                      2.0, 8.0, 4.0)
         z_shift = st.number_input("Protein z shift nm (Z_SHIFT): fine tune how "
@@ -461,6 +552,154 @@ def _gro_to_wrapped_pdb(gro):
             serial += 1
     out.append("END")
     return "\n".join(out), serial - 1
+
+
+def curve_page():
+    """Tab 3. The response curve, and the target read off it."""
+    import streamlit as st
+
+    st.caption("The run does not keep the number of sterol molecules a build "
+               "assigns. What it keeps is set by how many phospholipid "
+               "molecules each leaflet holds. This page measures that relation "
+               "and reads it backwards at the value a study requires.")
+    here = Path(__file__).resolve().parent
+
+    st.subheader("Measure the curve")
+    c1, c2, c3 = st.columns(3)
+    out_dir = c1.text_input("Output directory", str(Path.home() / "counts_run"),
+                            key="cb_out")
+    deltas = c2.text_input("Points (DELTAS)", "-20 -12 -6 0 6 12", key="cb_d")
+    prod_ns = c3.number_input("ns per point", 50, 2000, 250, 50, key="cb_ns")
+    b1, b2 = st.columns(2)
+    box_x = b1.number_input("Box X nm", 6.0, 200.0, 12.0, key="cb_x")
+    box_y = b2.number_input("Box Y nm", 6.0, 200.0, 12.0, key="cb_y")
+    st.code("\n".join(protocol_b_commands(out_dir, str(here), deltas,
+                                          int(prod_ns), box_x, box_y)),
+            language="bash")
+    st.caption("These runs take hours. Start them in a terminal and come back "
+               "to this page when the points are on disk.")
+
+    st.subheader("Read the curve")
+    cdir = st.text_input("Directory holding the measured points",
+                         str(Path(out_dir) / "curve"), key="cb_dir")
+    if not Path(cdir).is_dir():
+        st.info("No such directory yet.")
+        return
+    try:
+        pts = curve_points(cdir)
+    except Exception as exc:                      # a half-written point
+        st.error("Could not read the points: %s" % exc)
+        return
+    if not pts:
+        st.info("No points under that directory yet.")
+        return
+
+    st.dataframe([{"delta": p["delta"],
+                   "phospholipids upper": p["pl_upper"],
+                   "phospholipids lower": p["pl_lower"],
+                   "imbalance %": round(p["imbalance"], 2),
+                   "sterol upper %": round(p["share"], 2),
+                   "runs": p["n"],
+                   "sd": None if p["sd"] is None else round(p["sd"], 2)}
+                  for p in pts], hide_index=True)
+
+    t1, t2 = st.columns(2)
+    target = t1.number_input("Sterol share the run must hold (%)",
+                             1.0, 99.0, 60.0, 0.5, key="cb_t")
+    total = t2.number_input("Phospholipid molecules the system will hold "
+                            "(0 = as measured)", 0, 100000, 0, key="cb_tot")
+    sol = curve_solution(pts, float(target), int(total))
+    st.caption("fit residual %.2f points rms, %.2f worst; measured imbalance "
+               "%.2f%% to %.2f%%"
+               % (sol["rms"], sol["worst"], sol["imbalance_range"][0],
+                  sol["imbalance_range"][1]))
+    if not sol.get("ok"):
+        st.error(sol["reason"] + ". A target outside the measured range needs "
+                 "points measured there. Extrapolating the fit returns a "
+                 "number with no measurement behind it, and a leaflet "
+                 "stretched far enough stops behaving like a bilayer.")
+        return
+    m1, m2, m3 = st.columns(3)
+    m1.metric("imbalance", "%+.2f %%" % sol["imbalance"])
+    m2.metric("phospholipids upper", sol["pl_upper"])
+    m3.metric("phospholipids lower", sol["pl_lower"])
+    if "molecules_uncertainty" in sol:
+        st.caption("The scatter between runs of one build moves that imbalance "
+                   "by %.2f%%, which is %d phospholipid molecules."
+                   % (sol["imbalance_uncertainty"], sol["molecules_uncertainty"]))
+    st.success("Build at those two phospholipid numbers, leaving the sterol "
+               "numbers as they are. The run then settles at the target rather "
+               "than away from it.")
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+        fig, ax = plt.subplots(figsize=(5.4, 3.2))
+        xs = np.linspace(sol["imbalance_range"][0], sol["imbalance_range"][1], 200)
+        ax.plot(xs, np.polyval(sol["coefficients"], xs), color="#2a78d6", lw=1.8)
+        ax.errorbar([p["imbalance"] for p in pts], [p["share"] for p in pts],
+                    yerr=[0.0 if p["sd"] is None else p["sd"] / max(p["n"], 1) ** 0.5
+                          for p in pts],
+                    fmt="o", color="#2a78d6", capsize=2.5)
+        ax.axhline(float(target), color="#52514e", lw=0.8, ls=(0, (4, 3)))
+        ax.plot([sol["imbalance"]], [float(target)], marker="o", ms=7,
+                mfc="none", mec="#b5322e", mew=1.8)
+        ax.set_xlabel("phospholipid imbalance (% of the total)")
+        ax.set_ylabel("sterol in the upper leaflet (%)")
+        ax.spines[["top", "right"]].set_visible(False)
+        fig.tight_layout()
+        st.pyplot(fig)
+    except Exception:
+        pass
+
+
+def settled_page():
+    """Tab 2. What a finished run did with the composition it was built with."""
+    import streamlit as st
+
+    st.caption("Protocol A. Run the built system, count the sterol of each "
+               "leaflet over the settled part of that run, and build again at "
+               "those two numbers. The production run then keeps the "
+               "composition the Methods section states.")
+    here = Path(__file__).resolve().parent
+
+    c1, c2 = st.columns(2)
+    work = c1.text_input("Work directory of a built system", "", key="sa_w")
+    xtc = c2.text_input("Trajectory in that directory", "prod.xtc", key="sa_x")
+    prod_ns = st.number_input("ns to run before counting", 50, 2000, 200, 50,
+                              key="sa_ns")
+    if work:
+        st.code("\n".join(protocol_a_commands(work, xtc, str(here),
+                                              int(prod_ns))), language="bash")
+
+    st.subheader("Read a measurement that is already on disk")
+    jf = st.text_input("leaflet_relax.py JSON", "", key="sa_j")
+    if jf and Path(jf).is_file():
+        try:
+            st.dataframe(settled_rows(jf), hide_index=True)
+            st.caption("built is the number system.top gave the upper leaflet. "
+                       "The first frame of a production run is not that number, "
+                       "because the equilibration has already moved the sterol "
+                       "by the time the frame is written.")
+        except Exception as exc:
+            st.error("Could not read that file: %s" % exc)
+
+
+def main():
+    import streamlit as st
+
+    st.set_page_config(page_title="Martini 3 membrane builder", layout="wide")
+    st.title("Martini 3 membrane-protein system builder")
+    tabs = st.tabs(["Build a system",
+                    "The composition a run keeps",
+                    "The sterol asymmetry a run holds"])
+    with tabs[0]:
+        build_page()
+    with tabs[1]:
+        settled_page()
+    with tabs[2]:
+        curve_page()
 
 
 if __name__ == "__main__":
