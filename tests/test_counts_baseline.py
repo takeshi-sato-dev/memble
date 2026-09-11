@@ -14,6 +14,7 @@ give the first frame of every run an offset from the build.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -141,3 +142,89 @@ def test_the_repeats_of_a_point_are_not_read_as_points_of_the_curve(tmp_path):
     rows = list(csv.DictReader(open(out)))
     assert [r["point"] for r in rows] == ["d-20", "d0"]
     assert all(float(r["moved"]) == 8.0 for r in rows)
+
+
+SOLVE = ROOT / "solve_target.py"
+
+
+def _curve_dir(tmp_path, rows):
+    """rows: (delta, pl_upper, pl_lower, settled share %, runs)."""
+    d = tmp_path / "curve"
+    d.mkdir()
+    for delta, pu, pl, share, runs in rows:
+        for k in range(runs):
+            tot = 134.0
+            up = share / 100.0 * tot
+            rec = {"counts": {"CHOL": {"upper": [up] * 50,
+                                       "lower": [tot - up] * 50}},
+                   "time_ps": [i * 1000.0 for i in range(50)],
+                   "between_leaflets": {"CHOL": {"built": 71, "first_frame": 71,
+                                                 "settled": up, "moved": up - 71,
+                                                 "baseline": "system.top"}},
+                   "built_counts": {"upper": {"CHOL": 71, "DLPC": pu - 70,
+                                              "PSM": 70},
+                                    "lower": {"CHOL": 63, "DLPC": pl - 69,
+                                              "DOPS": 62, "POP2_45": 7}}}
+            name = ("relax_d%d.json" % delta if k == 0
+                    else "relax_d%d_s%d_250ns.json" % (delta, k + 1))
+            (d / name).write_text(json.dumps(rec))
+    return d
+
+
+CURVE_ROWS = [(-20, 120, 152, 64.78, 3), (-12, 128, 145, 63.20, 1),
+              (-6, 134, 139, 61.17, 1), (0, 140, 132, 56.86, 3),
+              (6, 146, 126, 50.26, 1), (12, 152, 120, 46.36, 1)]
+
+
+def test_a_target_returns_the_two_phospholipid_numbers(tmp_path):
+    """The point of the curve is to be read backwards. A share the run must
+    hold goes in, and the numbers a build has to be given come out."""
+    d = _curve_dir(tmp_path, CURVE_ROWS)
+    p = subprocess.run([sys.executable, str(SOLVE), str(d), "--target", "60",
+                        "--emit-env"], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr + p.stdout
+    env = dict(line.split("=", 1) for line in p.stdout.splitlines()
+               if re.match(r"^[A-Z_]+=", line))
+    up, lo = int(env["PL_UPPER"]), int(env["PL_LOWER"])
+    assert up + lo == 272                      # the curve's own total
+    assert lo > up                             # 60% needs the upper leaflet short
+    assert abs(float(env["IMBALANCE_PCT"])) < 3.0
+
+
+def test_the_numbers_scale_to_the_box_the_system_will_use(tmp_path):
+    """The axis is a fraction, so a target asked of a larger system returns
+    the same fraction and a larger pair of numbers."""
+    d = _curve_dir(tmp_path, CURVE_ROWS)
+    out = {}
+    for total in (272, 1937):
+        p = subprocess.run([sys.executable, str(SOLVE), str(d), "--target", "60",
+                            "--total-pl", str(total), "--emit-env"],
+                           capture_output=True, text=True)
+        assert p.returncode == 0, p.stderr + p.stdout
+        env = dict(line.split("=", 1) for line in p.stdout.splitlines()
+                   if re.match(r"^[A-Z_]+=", line))
+        out[total] = (int(env["PL_UPPER"]), int(env["PL_LOWER"]),
+                      float(env["IMBALANCE_PCT"]))
+    assert out[272][2] == out[1937][2]
+    assert sum(out[1937][:2]) == 1937
+    assert out[1937][0] > out[272][0]
+
+
+def test_a_target_the_curve_does_not_reach_is_refused(tmp_path):
+    """Extrapolating a fitted quadratic past its data returns a number with no
+    measurement behind it. Refuse, and say what the curve does reach."""
+    d = _curve_dir(tmp_path, CURVE_ROWS)
+    p = subprocess.run([sys.executable, str(SOLVE), str(d), "--target", "85"],
+                       capture_output=True, text=True)
+    assert p.returncode == 2
+    assert "does not reach" in p.stdout
+    assert "46" in p.stdout and "64" in p.stdout
+
+
+def test_the_repeats_of_a_point_are_averaged_into_that_point(tmp_path):
+    """Three runs of one build are one point of the curve, not three."""
+    d = _curve_dir(tmp_path, CURVE_ROWS)
+    p = subprocess.run([sys.executable, str(SOLVE), str(d), "--target", "60"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr + p.stdout
+    assert "6 points" in p.stdout
