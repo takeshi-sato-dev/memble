@@ -15,6 +15,7 @@ is made here. What is reported is what the membrane did.
 """
 import argparse
 import json
+import os
 
 import numpy as np
 
@@ -26,6 +27,74 @@ except ImportError:                                    # pragma: no cover
 WATER = {"W", "WF", "ION", "NA", "CL", "NA+", "CL-"}
 STEROL_HEAD = {"ROH"}
 PHOSPHATE = {"PO4"}
+
+
+def built_counts(top_path, build_path):
+    """The number of molecules of each species the build gave each leaflet.
+
+    memble writes the two leaflets one after the other in the [ molecules ]
+    section of system.top, the upper leaflet first, and memble_build.json names
+    the species of each leaflet. The number of species in each leaflet is what
+    divides the lipid lines of system.top between them.
+
+    This is the baseline the moved numbers below are measured against. The
+    first frame of the trajectory is not that baseline, because the
+    equilibration has already moved cholesterol by the time that frame is
+    written.
+    """
+    def n_species(spec):
+        """memble records a leaflet as "CHOL:1.0 DLPC:0.71 PSM:1"."""
+        if isinstance(spec, dict):
+            return len(spec)
+        return len([x for x in str(spec).split() if ":" in x])
+
+    try:
+        with open(build_path) as fh:
+            b = json.load(fh)
+        n_up, n_lo = n_species(b["upper"]), n_species(b["lower"])
+    except Exception:
+        return None
+
+    lines, inside = [], False
+    try:
+        with open(top_path) as fh:
+            for ln in fh:
+                s = ln.split(";")[0].strip()
+                if not s:
+                    continue
+                if s.startswith("["):
+                    inside = s.replace(" ", "").lower() == "[molecules]"
+                    continue
+                if not inside:
+                    continue
+                f = s.split()
+                if len(f) == 2 and f[1].isdigit():
+                    lines.append((f[0], int(f[1])))
+    except Exception:
+        return None
+
+    lip = [(n, k) for n, k in lines
+           if n.upper() not in WATER and not n.startswith("molecule_")]
+
+    if not n_up or not n_lo:
+        # A build given one composition for the whole bilayer records no
+        # per-leaflet species list. Such a build writes the same species to
+        # both leaflets, so the lipid lines divide in the middle.
+        half = len(lip) // 2
+        if not half or len(lip) % 2:
+            return None
+        if [n for n, _ in lip[:half]] != [n for n, _ in lip[half:]]:
+            return None
+        n_up = n_lo = half
+
+    if len(lip) < n_up + n_lo:
+        return None
+
+    out = {"upper": {}, "lower": {}}
+    for side, chunk in (("upper", lip[:n_up]), ("lower", lip[n_up:n_up + n_lo])):
+        for n, k in chunk:
+            out[side][n] = out[side].get(n, 0) + k
+    return out
 
 
 def lipid_residues(top):
@@ -64,8 +133,18 @@ def main():
     ap.add_argument("--last-fraction", type=float, default=0.5,
                     help="the fraction of the trajectory averaged for the "
                          "settled values (default the second half)")
+    ap.add_argument("--top", default="",
+                    help="system.top of the build, which carries the number of "
+                         "molecules each leaflet was given (default: system.top "
+                         "beside --gro)")
+    ap.add_argument("--build", default="",
+                    help="memble_build.json of the build (default: beside --gro)")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
+
+    work = os.path.dirname(os.path.abspath(a.gro))
+    built = built_counts(a.top or os.path.join(work, "system.top"),
+                         a.build or os.path.join(work, "memble_build.json"))
 
     t = md.load(a.xtc, top=a.gro, stride=a.stride)
     top = t.topology
@@ -137,10 +216,15 @@ def main():
     moved = {}
     for s in species:
         u = np.array(counts[s]["upper"], dtype=float)
-        moved[s] = {"start": int(u[0]),
+        base = built["upper"].get(s) if built else None
+        moved[s] = {"built": base,
+                    "first_frame": int(u[0]),
                     "settled": float(u[cut:].mean()),
-                    "moved": float(u[cut:].mean() - u[0])}
+                    "moved": float(u[cut:].mean()
+                                   - (base if base is not None else u[0])),
+                    "baseline": "system.top" if base is not None else "first frame"}
     out["between_leaflets"] = moved
+    out["built_counts"] = built
 
     # --- 2. the thickness of each leaflet --------------------------------
     po4 = [np.array([x.index for x in r.atoms if x.name in PHOSPHATE])
@@ -179,10 +263,16 @@ def main():
 
     print("frames %d, lipids %d, second half from %.1f ns"
           % (t.n_frames, len(res), t.time[cut] / 1000.0))
+    if built is None:
+        print("  NOTE: system.top and memble_build.json were not both read, so"
+              " the moved numbers below are taken against the first frame of"
+              " this trajectory and not against the build.")
     for s in species:
         m = moved[s]
-        print("  %-8s upper %3d at the start, %6.1f settled, moved %+5.1f"
-              % (s, m["start"], m["settled"], m["moved"]))
+        base = m["built"] if m["built"] is not None else m["first_frame"]
+        print("  %-8s upper %3d at the build, %3d in the first frame, %6.1f "
+              "settled, moved %+5.1f"
+              % (s, base, m["first_frame"], m["settled"], m["moved"]))
     print("  thickness   upper %.3f nm, lower %.3f nm, difference %.3f nm"
           % (out["leaflet_thickness_nm"]["upper"]["settled"],
              out["leaflet_thickness_nm"]["lower"]["settled"],

@@ -7,6 +7,7 @@ bilayer with a protein in it produces: leaflets of unequal composition, a lipid
 whose head beads outnumber its tail beads, a sterol that carries no phosphate,
 and a leaflet that is not flat.
 """
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -138,3 +139,55 @@ def test_a_lipid_in_a_dimple_stays_in_its_own_leaflet(tmp_path):
     assert r["counts"]["DLPC"]["upper"][0] == 10
     assert r["counts"]["DLPC"]["lower"][0] == 0
     assert r["counts"]["DPPC"]["upper"][0] == 0
+
+
+# --- the baseline the moved numbers are measured against --------------------
+#
+# A trajectory's first frame is not the composition the system was built with:
+# the equilibration has already moved cholesterol by the time that frame is
+# written. The build is read from system.top, whose [ molecules ] section holds
+# the upper leaflet first and the lower leaflet second, and from
+# memble_build.json, which names the species of each leaflet.
+
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location("leaflet_relax", SCRIPT)
+_lr = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_lr)
+
+
+def _write_build(tmp_path, molecules, upper="", lower=""):
+    top = tmp_path / "system.top"
+    top.write_text("#include \"martini.itp\"\n\n[ molecules ]\n; name number\n"
+                   + "".join("%s %d\n" % (n, k) for n, k in molecules))
+    bj = tmp_path / "memble_build.json"
+    bj.write_text(json.dumps({"upper": upper, "lower": lower}))
+    return str(top), str(bj)
+
+
+def test_the_build_is_read_from_the_topology_leaflet_by_leaflet(tmp_path):
+    top, bj = _write_build(
+        tmp_path,
+        [("molecule_0", 1), ("CHOL", 71), ("DLPC", 50), ("PSM", 70),
+         ("CHOL", 63), ("DLPC", 83), ("DOPS", 62), ("POP2_45", 8),
+         ("W", 16023), ("NA", 264), ("CL", 174)],
+        upper="CHOL:1.014 DLPC:0.714 PSM:1",
+        lower="CHOL:1.016 DLPC:1.339 DOPS:1 POP2_45:0.113")
+    got = _lr.built_counts(top, bj)
+    assert got["upper"] == {"CHOL": 71, "DLPC": 50, "PSM": 70}
+    assert got["lower"] == {"CHOL": 63, "DLPC": 83, "DOPS": 62, "POP2_45": 8}
+
+
+def test_a_build_given_one_composition_divides_its_lipids_in_the_middle(tmp_path):
+    top, bj = _write_build(
+        tmp_path,
+        [("molecule_0", 1), ("CHOL", 47), ("DLPC", 47), ("PSM", 47),
+         ("CHOL", 47), ("DLPC", 46), ("PSM", 46), ("W", 11065)])
+    got = _lr.built_counts(top, bj)
+    assert got["upper"] == {"CHOL": 47, "DLPC": 47, "PSM": 47}
+    assert got["lower"] == {"CHOL": 47, "DLPC": 46, "PSM": 46}
+
+
+def test_a_missing_topology_returns_nothing_rather_than_a_wrong_baseline(tmp_path):
+    assert _lr.built_counts(str(tmp_path / "no.top"),
+                            str(tmp_path / "no.json")) is None
