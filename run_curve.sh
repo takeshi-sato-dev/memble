@@ -55,26 +55,10 @@ APL_U0=${APL_U0:-0.6760}; APL_L0=${APL_L0:-0.7240}
 N_U0=$((CH_U + DL_U + SM_U)); N_L0=$((CH_L + DL_L + PS_L + P2_L))
 
 report(){
-  echo ""
-  echo "  PL up-lo   d   CHOL start        CHOL settled       upper share"
-  for f in "$OUT"/relax_d*.json; do
-    [ -e "$f" ] || { echo "  (nothing measured yet)"; return; }
-    "$PY" - "$f" <<'PYEOF'
-import json, sys, re
-f = sys.argv[1]
-d = json.load(open(f))
-c = d["counts"]; n = len(d["time_ps"]); cut = int(0.6 * n)
-u = c["CHOL"]["upper"]; l = c["CHOL"]["lower"]; tot = u[0] + l[0]
-su = sum(u[cut:]) / len(u[cut:])
-pu = sum(v["upper"][0] for s, v in c.items() if s != "CHOL")
-pl = sum(v["lower"][0] for s, v in c.items() if s != "CHOL")
-dd = re.search(r"relax_d(-?\d+)\.json", f).group(1)
-print("  %+8d  %+4s  %3d/%-3d (%.1f%%)  %6.1f/%-6.1f (%.1f%%)   %+.2f points"
-      % (pu - pl, dd, u[0], l[0], 100 * u[0] / tot, su, tot - su,
-         100 * su / tot, 100 * su / tot - 100 * u[0] / tot))
-PYEOF
-  done
-  echo ""
+  # Both axes are taken from the build of each point and not from the first
+  # frame of its run. curve_report.py reads system.top of each build.
+  "$PY" "$R/curve_report.py" "$OUT" --prefix relax_d --last-fraction "$LAST" \
+      || echo "  (nothing measured yet)"
 }
 
 [ "${1:-}" = "--report" ] && { report; exit 0; }
