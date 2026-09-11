@@ -22,7 +22,11 @@ import numpy as np
 try:
     import mdtraj as md
 except ImportError:                                    # pragma: no cover
-    raise SystemExit("leaflet_relax.py needs mdtraj:  pip install mdtraj")
+    # built_counts below reads two text files and needs no trajectory library.
+    # summarise_counts.py and curve_report.py import this module for it alone,
+    # and both must run where mdtraj is not installed. Reading a trajectory
+    # still needs mdtraj, and main() says so.
+    md = None
 
 WATER = {"W", "WF", "ION", "NA", "CL", "NA+", "CL-"}
 STEROL_HEAD = {"ROH"}
@@ -141,6 +145,9 @@ def main():
                     help="memble_build.json of the build (default: beside --gro)")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
+
+    if md is None:
+        raise SystemExit("leaflet_relax.py needs mdtraj:  pip install mdtraj")
 
     work = os.path.dirname(os.path.abspath(a.gro))
     built = built_counts(a.top or os.path.join(work, "system.top"),
