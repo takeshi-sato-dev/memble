@@ -63,10 +63,29 @@ def main():
     ap.add_argument("--csv", default="")
     a = ap.parse_args()
 
-    files = sorted(glob.glob(os.path.join(a.dir, a.prefix + "*.json")),
-                   key=lambda f: int(re.search(r"(-?\d+)\.json$", f).group(1)))
+    # One point of the curve is "<prefix><integer>.json" and nothing else. The
+    # same directory also holds the repeats of a point, which carry a seed and
+    # a run length in the name (relax_d0_s2_250ns.json), and those are not
+    # points of the curve. Take the names that are a point and leave the rest,
+    # rather than reading a seed as a delta or stopping on the first name that
+    # does not parse.
+    pat = re.compile(re.escape(a.prefix) + r"(-?\d+)\.json$")
+    keyed = []
+    skipped = []
+    for f in glob.glob(os.path.join(a.dir, a.prefix + "*.json")):
+        m = pat.search(os.path.basename(f))
+        if m:
+            keyed.append((int(m.group(1)), f))
+        else:
+            skipped.append(os.path.basename(f))
+    files = [f for _, f in sorted(keyed)]
     if not files:
-        raise SystemExit("no %s*.json under %s" % (a.prefix, a.dir))
+        raise SystemExit("no %s<integer>.json under %s" % (a.prefix, a.dir))
+    if skipped:
+        print("  (%d file%s in this directory are not points of the curve and "
+              "were left out: %s)"
+              % (len(skipped), "" if len(skipped) == 1 else "s",
+                 ", ".join(sorted(skipped))))
 
     print("  PL up-lo    CHOL built      CHOL settled          upper share"
           "     moved   first frame")

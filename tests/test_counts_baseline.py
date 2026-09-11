@@ -114,3 +114,30 @@ def test_the_curve_is_drawn_against_the_numbers_the_builds_were_given(tmp_path):
     assert all(float(r["moved"]) == 8.0 for r in rows)
     assert all(int(r["chol_upper_first_frame"]) == 73 for r in rows)
     assert all(r["baseline_from"] == "system.top" for r in rows)
+
+
+def test_the_repeats_of_a_point_are_not_read_as_points_of_the_curve(tmp_path):
+    """A point of the curve is named for its delta and nothing else. Seeds of a
+    point carry the seed and the run length as well (relax_d0_s2_250ns.json),
+    and they share the directory. Leave them out and say so, rather than
+    stopping on the first name that does not parse."""
+    d = tmp_path / "curve"
+    d.mkdir()
+    for tag, dl_u, dl_l in (("d-20", 50, 83), ("d0", 70, 63)):
+        _build(str(d / tag / ("%s_work" % tag)), 71, dl_u, 63, dl_l)
+        (d / ("relax_%s.json" % tag)).write_text(json.dumps(_run_json(71, +2, 8)))
+    for name in ("relax_d0_s2_250ns.json", "relax_d0_s2_500ns.json",
+                 "relax_d-20_s3.json"):
+        (d / name).write_text(json.dumps(_run_json(71, +2, 12)))
+
+    out = d / "curve.csv"
+    p = subprocess.run([sys.executable, str(CURVE), str(d), "--csv", str(out)],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    assert "not points of the curve" in p.stdout
+    assert "relax_d0_s2_250ns.json" in p.stdout
+
+    import csv
+    rows = list(csv.DictReader(open(out)))
+    assert [r["point"] for r in rows] == ["d-20", "d0"]
+    assert all(float(r["moved"]) == 8.0 for r in rows)
