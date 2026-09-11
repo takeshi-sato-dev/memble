@@ -86,8 +86,16 @@ def main():
 
     offs = [(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
             for dz in (-1, 0, 1)]
+    # Two smallest distances, not one. A pair of water beads packed on top of
+    # each other is resolved by the first steps of the minimization and it
+    # stops nothing. A pair that holds a lipid or the protein is what tears a
+    # molecule apart when the restraints of the equilibration are eased, and
+    # that is the pair the exit code follows.
+    is_w = np.array([resn[i] in ("W", "WF") for i in range(n)])
     best = 1e9
     bestpair = None
+    hard_best = 1e9
+    hard_pair = None
     for (cx, cy, cz), ai in grid.items():
         cand = []
         for dx, dy, dz in offs:
@@ -100,19 +108,33 @@ def main():
         mi = mol[ai][:, None]; mc = mol[cand][None, :]
         r[(mi == mc)] = 1e9
         r[r == 0] = 1e9
-        if r.size and r.min() < best:
+        if not r.size:
+            continue
+        if r.min() < best:
             a, b = np.unravel_index(np.argmin(r), r.shape)
             best = r.min()
             bestpair = (ai[a], cand[b])
+        rh = np.where(is_w[ai][:, None] & is_w[cand][None, :], 1e9, r)
+        if rh.min() < hard_best:
+            a, b = np.unravel_index(np.argmin(rh), rh.shape)
+            hard_best = rh.min()
+            hard_pair = (ai[a], cand[b])
 
     if bestpair is None:
         print("check_min_distance: no inter-molecular pairs found")
         return
     i, j = bestpair
-    msg = ("check_min_distance: smallest inter-molecular distance = %.3f nm "
-           "between %s %d:%s and %s %d:%s"
-           % (best, resn[i], resid[i], aname[i], resn[j], resid[j], aname[j]))
-    print(msg)
+    print("check_min_distance: smallest inter-molecular distance = %.3f nm "
+          "between %s %d:%s and %s %d:%s"
+          % (best, resn[i], resid[i], aname[i], resn[j], resid[j], aname[j]))
+    if hard_pair is not None and hard_pair != bestpair:
+        hi, hj = hard_pair
+        print("check_min_distance: smallest distance that holds a lipid or the "
+              "protein = %.3f nm between %s %d:%s and %s %d:%s"
+              % (hard_best, resn[hi], resid[hi], aname[hi],
+                 resn[hj], resid[hj], aname[hj]))
+    elif hard_pair is None:
+        print("check_min_distance: every close pair is water against water")
     if intra_pair is not None:
         ii, jj = intra_pair
         print("check_min_distance: smallest intra-molecular contact  = %.3f nm "
@@ -129,12 +151,21 @@ def main():
               "apart, which no bonded parameter asks for. The itp of that "
               "molecule, or the structure built from it, places them on the same "
               "point." % intra_best)
-    if best < args.min:
-        print("check_min_distance: WARNING the smallest inter-molecular distance "
-              "is below %.2f nm; minimization may see a very large force here"
-              % args.min)
+    if best < args.min and hard_best >= args.min:
+        print("check_min_distance: the closest pair is water against water at "
+              "%.3f nm, below %.2f. The minimization moves those two beads "
+              "apart in its first steps and the build continues. The number of "
+              "water beads grows with the box, so a large system carries such a "
+              "pair almost every time." % (best, args.min))
+    if hard_best < args.min:
+        print("check_min_distance: WARNING a pair that holds a lipid or the "
+              "protein is %.3f nm apart, below %.2f nm. The minimization does "
+              "not always separate such a pair, and a molecule that is still "
+              "overlapped when the restraints of stage 6.3 are eased is torn "
+              "apart: LINCS then reports a constraint deviation of millions and "
+              "the run stops making progress." % (hard_best, args.min))
         sys.exit(1)
-    print("check_min_distance: OK, no inter-molecular overlap below %.2f nm "
+    print("check_min_distance: OK, no lipid or protein overlap below %.2f nm "
           "(the system should minimize without infinite forces)" % args.min)
 
 

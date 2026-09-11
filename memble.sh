@@ -737,10 +737,13 @@ must "the final separation of overlapping beads" \
 if [ -n "$HELPER_MINDIST" ] && [ -f "$HELPER_MINDIST" ]; then
   if ! "$PY" "$HELPER_MINDIST" --gro system.gro --lipids "${ALL[*]}" --min 0.12; then
     if [ "${MEMBLE_ALLOW_OVERLAP:-0}" = "1" ]; then
-      echo ">>> MEMBLE_ALLOW_OVERLAP=1: continuing with a residual overlap."
+      echo ">>> MEMBLE_ALLOW_OVERLAP=1: continuing with a residual overlap that"
+      echo ">>> holds a lipid or the protein. Watch stage 6.3: a molecule that is"
+      echo ">>> still overlapped when the restraints are eased is torn apart, and"
+      echo ">>> LINCS then reports a constraint deviation of millions."
     else
-      stop "beads of different molecules are closer than 0.12 nm" \
-        "Minimization of this system reports an infinite force, or it moves the two\nmolecules far enough apart to distort them. The pair is named just above.\n  1. give the packing room:   raise BOX_X and BOX_Y by 1 nm\n  2. lower the lipid density: raise COBY_APL\n  3. if the pair involves the protein, raise SPACING_NM or lower N_COPY\n  4. to keep this system and look at it:  export MEMBLE_ALLOW_OVERLAP=1"
+      stop "a pair that holds a lipid or the protein is closer than 0.12 nm" \
+        "Minimization does not always separate such a pair. A molecule that is still\noverlapped when the restraints of stage 6.3 are eased is torn apart, and the run\nthen makes no progress. The pair is named just above. A pair of water beads does\nnot stop a build, because the minimization moves those apart in its first steps.\n  1. build again with another packing:  raise SEED by one\n  2. give the packing room:             raise BOX_X and BOX_Y by 1 nm\n  3. lower the lipid density:           raise COBY_APL\n  4. if the pair holds the protein:     raise SPACING_NM or lower N_COPY\n  5. to keep this system and look at it: export MEMBLE_ALLOW_OVERLAP=1"
     fi
   fi
 fi
