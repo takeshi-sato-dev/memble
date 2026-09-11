@@ -43,7 +43,11 @@ OUT=${OUT:-$HOME/counts_run}/curve
 DELTAS=${DELTAS:-"-20 -12 -6 0 6 12 20"}
 PROD_NS=${PROD_NS:-250}
 LAST=${LAST:-0.4}                # the fraction of the run that is averaged
-NT=${NT:-8}
+NT=${NT:-8}                       # OpenMP threads per rank
+NTMPI=${NTMPI:-1}                # thread-MPI ranks; raise on a machine
+                                 # with many cores and no GPU, for example
+                                 # NTMPI=8 NT=8 on 64 cores
+MDRUN_EXTRA=${MDRUN_EXTRA:-}     # extra mdrun arguments
 GPU=${GPU:-0}
 mkdir -p "$OUT"
 
@@ -81,8 +85,8 @@ run_stage(){
     [ $rc -eq 0 ] || { echo "    grompp failed for $out"; return 1; }
   fi
   [ -f "$out.cpt" ] && cont="-cpi $out.cpt -append"
-  CUDA_VISIBLE_DEVICES=$GPU "$GMX" mdrun -deffnm "$out" -v -ntmpi 1 -ntomp "$NT" \
-      $cont >> "mdrun_$out.log" 2>&1 || { echo "    mdrun failed for $out"; return 1; }
+  CUDA_VISIBLE_DEVICES=$GPU "$GMX" mdrun -deffnm "$out" -v -ntmpi "$NTMPI" -ntomp "$NT" \
+      $MDRUN_EXTRA $cont >> "mdrun_$out.log" 2>&1 || { echo "    mdrun failed for $out"; return 1; }
   return 0
 }
 
