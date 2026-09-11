@@ -197,38 +197,18 @@ def test_leaflet_area_moderate_warns_not_abort(tmp_path):
     """A difference between the tolerance and the hard tolerance warns.
 
     The lower leaflet holds 85 molecules where the upper holds 100, which
-    stretches its lipids by about a sixth. The tolerance is given here rather
-    than taken from the default, because the difference this system carries is
-    the size that the default is set to leave alone. The build carries on and
-    the report names the difference.
+    stretches its lipids by about a sixth. The build carries on and the report
+    names the difference.
     """
     gro = tmp_path / "asym2.gro"
     recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
            [(r, "POPC", "PO4", -2.0) for r in range(101, 186)]
     _write_gro_grid(gro, recs)
     p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC",
-            "--tol", 0.08, "--asym", 1, expect_zero=False)
+            "--asym", 1, expect_zero=False)
     assert p.returncode == 0
     assert "MISMATCH" in p.stdout
     assert "WARNING" in p.stdout
-
-
-def test_a_difference_of_a_sixth_passes_at_the_default_tolerance(tmp_path):
-    """The default tolerance leaves a difference of that size alone.
-
-    The mean area per lipid of a leaflet is the area of the box divided by the
-    number of molecules assigned to that leaflet, so a difference of this size
-    returns the numbers that were asked for rather than a fault. The default
-    tolerance is set to catch a fault, and this system is not one.
-    """
-    gro = tmp_path / "asym3.gro"
-    recs = [(r, "POPC", "PO4", +2.0) for r in range(1, 101)] + \
-           [(r, "POPC", "PO4", -2.0) for r in range(101, 186)]
-    _write_gro_grid(gro, recs)
-    p = run("leaflet_area_check.py", "--gro", gro, "--lipids", "POPC",
-            "--asym", 1, expect_zero=False)
-    assert p.returncode == 0
-    assert "MISMATCH" not in p.stdout
 
 
 def test_leaflets_with_the_same_counts_pass(tmp_path):
@@ -1210,3 +1190,59 @@ def test_itp_to_struct_ganglioside_head_up(tmp_path):
     # both acyl/sphingoid tails below
     for c in ("T1A", "T2A", "T3A", "T4A", "C1B", "C2B", "C3B"):
         assert z[c] < 0, "%s should be down" % c
+
+
+def _thin_box_gro(path, box_z):
+    """A protein spanning z 1..7 in a box of the given height, with water."""
+    rows = []
+    s = 1
+    def add(rn, an, z):
+        nonlocal s
+        rows.append("%5d%-5s%5s%5d%8.3f%8.3f%8.3f" % (1, rn, an, s, 1.0, 1.0, z))
+        s += 1
+    for z in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0):
+        add("ALA", "BB", z)
+    for z in (2.5, 3.5, 4.5, 5.5):
+        add("DLPC", "C1A", z)
+    rng = __import__("random").Random(0)
+    for _ in range(60):
+        add("W", "W", rng.uniform(0.3, box_z - 0.3))
+    path.write_text("t\n%d\n" % len(rows) + "\n".join(rows) +
+                    "\n   6.00000   6.00000%10.5f\n" % box_z)
+
+
+def test_add_water_reports_the_cushion_when_the_box_was_set_by_hand(tmp_path):
+    """A box_z set by the caller makes add_water a no-op, and the water each
+    side is then whatever that box_z leaves rather than WATER_NM. Report both
+    numbers, or nobody can tell what cushion the system actually carries."""
+    gro = tmp_path / "s.gro"
+    _thin_box_gro(gro, 16.0)                      # protein spans 6 nm
+    top = tmp_path / "s.top"
+    top.write_text("[ molecules ]\n")
+    p = run("add_water.py", "--gro", gro, "--top", top,
+            "--water-nm", "1.5", "--salt", "0")
+    out = p.stdout
+    assert "nothing to do" in out
+    assert "z span 6.00 nm" in out                # what the protein really is
+    assert "5.00 nm per side" in out              # (16 - 6) / 2, not the 1.5
+    assert "WATER_NM asked for 1.50" in out
+
+
+def test_add_water_reports_the_cushion_when_it_sizes_the_box(tmp_path):
+    """When add_water does size the box, the cushion it reports is WATER_NM."""
+    gro = tmp_path / "s.gro"
+    _thin_box_gro(gro, 8.0)
+    top = tmp_path / "s.top"
+    top.write_text("[ molecules ]\n")
+    p = run("add_water.py", "--gro", gro, "--top", top,
+            "--water-nm", "2.5", "--salt", "0")
+    assert "protein z span 6.00 nm, water 2.50 nm per side" in p.stdout
+    box_z = float((tmp_path / "s.gro").read_text().splitlines()[-1].split()[2])
+    assert abs(box_z - 11.0) < 1e-3               # 6 + 2 * 2.5
+
+
+def test_water_nm_default_is_fifteen_angstrom():
+    """The default water each side. 1.5 nm puts 3.0 nm between a protein end
+    and its periodic image, which is above twice the 1.1 nm Martini cutoff."""
+    src = open(os.path.join(HELPERS, "memble.sh")).read()
+    assert "WATER_NM=${WATER_NM:-1.5}" in src

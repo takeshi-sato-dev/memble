@@ -107,6 +107,11 @@ for d in $DELTAS; do
   export UPPER="CHOL:$("$PY" -c "print('%.5f'%($CH_U/$SM_U))") DLPC:$("$PY" -c "print('%.5f'%($du/$SM_U))") PSM:1"
   export LOWER="CHOL:$("$PY" -c "print('%.5f'%($CH_L/$PS_L))") DLPC:$("$PY" -c "print('%.5f'%($dl/$PS_L))") DOPS:1 POP2_45:$("$PY" -c "print('%.5f'%($P2_L/$PS_L))")"
   export APL_UPPER="$au" APL_LOWER="$al"
+  # box_z is pinned rather than derived. add_water.py would size it from the
+  # z span of the protein plus 2*WATER_NM, and every point of the curve must
+  # carry the same box so that the only difference between points is the
+  # number of phospholipid molecules. 16 nm holds the 10.53 nm protein with
+  # 2.74 nm of water each side.
   export BOX_X=${BOX_X:-12} BOX_Y=${BOX_Y:-12} BOX_Z=${BOX_Z:-16}
   export TM_RANGE=${TM_RANGE:-65:88} SS_MODE=${SS_MODE:-tm}
   export WATER_NM=${WATER_NM:-2.5} SALT_M=${SALT_M:-0.15} N_COPY=${N_COPY:-1}

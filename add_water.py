@@ -81,6 +81,7 @@ def main():
     W = args.water_resname
     bx, by = box[0], box[1]
 
+    prot_span = None                 # z extent of the protein, nm, when measured
     if args.keep_box:
         new_box_z = box[2]
         shift_z = 0.0
@@ -97,10 +98,17 @@ def main():
         if len(prot_z) == 0:
             prot_z = xyz[:, 2]
         pz_lo, pz_hi = prot_z.min(), prot_z.max()
-        new_box_z = (pz_hi - pz_lo) + 2 * args.water_nm
+        prot_span = float(pz_hi - pz_lo)
+        new_box_z = prot_span + 2 * args.water_nm
         if new_box_z <= box[2] + 1e-6:
-            print("add_water: existing box_z %.2f already >= target %.2f; "
-                  "nothing to do" % (box[2], new_box_z))
+            # The caller set box_z by hand and it is already tall enough. Say
+            # what that leaves, because the water each side is then whatever the
+            # chosen box_z happens to give and not the value that was asked for.
+            print("add_water: box_z %.2f was set by the caller and the target is "
+                  "%.2f; nothing to do. Protein z span %.2f nm, water %.2f nm "
+                  "per side (WATER_NM asked for %.2f)"
+                  % (box[2], new_box_z, prot_span,
+                     (box[2] - prot_span) / 2.0, args.water_nm))
             return
         shift_z = new_box_z / 2.0 - 0.5 * (pz_lo + pz_hi)
     xyz[:, 2] += shift_z
@@ -269,8 +277,12 @@ def main():
             out.append("%-6s %d" % (name, add[name]))
     open(args.top, "w").write("\n".join(out) + "\n")
 
-    print("add_water: box_z %.2f -> %.2f nm; added W=%d NA=%d CL=%d (density %.2f /nm^3)"
-          % (box[2], new_box_z, add_w, add_na, add_cl, dens))
+    cushion = ("" if prot_span is None else
+               "; protein z span %.2f nm, water %.2f nm per side"
+               % (prot_span, (new_box_z - prot_span) / 2.0))
+    print("add_water: box_z %.2f -> %.2f nm; added W=%d NA=%d CL=%d "
+          "(density %.2f /nm^3)%s"
+          % (box[2], new_box_z, add_w, add_na, add_cl, dens, cushion))
 
 
 if __name__ == "__main__":

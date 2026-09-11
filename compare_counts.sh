@@ -58,6 +58,11 @@ ARMS=${ARMS:-"eqn table measured"}
 # the composition of the comparison: asymmetric, five components, one sterol
 export UPPER=${UPPER:-"CHOL:1 DLPC:1 PSM:1"}
 export LOWER=${LOWER:-"CHOL:1 DLPC:1 DOPS:1 POP2_45:0.1"}
+# box_z is pinned rather than derived. add_water.py would size it from the
+# z span of the protein plus 2*WATER_NM, and every point of the curve must
+# carry the same box so that the only difference between points is the
+# number of phospholipid molecules. 16 nm holds the 10.53 nm protein with
+# 2.74 nm of water each side.
 export BOX_X=${BOX_X:-12} BOX_Y=${BOX_Y:-12} BOX_Z=${BOX_Z:-16}
 export TM_RANGE=${TM_RANGE:-65:88} SS_MODE=${SS_MODE:-tm}
 export WATER_NM=${WATER_NM:-2.5} SALT_M=${SALT_M:-0.15} N_COPY=${N_COPY:-1}

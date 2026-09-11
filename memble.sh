@@ -75,7 +75,14 @@ COBY_OPT_STEPS=${COBY_OPT_STEPS:-30}   # COBY overlap-optimizer max steps; kept 
 COBY_PUSH=${COBY_PUSH:-1.0}             # COBY lipid-lipid push multiplier (default 1.0)
 # geometry / thermodynamics
 N_COPY=${N_COPY:-4}; SPACING_NM=${SPACING_NM:-20}; MARGIN_NM=${MARGIN_NM:-8}
-WATER_NM=${WATER_NM:-3.0}; MEMB_THICK_NM=${MEMB_THICK_NM:-4.0}; TEMP=${TEMP:-310}
+# WATER_NM is the water each side of the protein, in nm, and it is what sets
+# box_z: add_water.py measures the z span of the protein and grows the box to
+# that span plus 2*WATER_NM. 1.5 nm is three Martini water beads, which puts
+# 3.0 nm between one protein end and its periodic image, above twice the 1.1 nm
+# cutoff. A taller cushion costs water beads and nothing else: at 3.0 nm the
+# 32 by 32 nm build of Section 3.4 carries 114,034 water beads against 90,562
+# at 1.5 nm, which is 15% of the whole system.
+WATER_NM=${WATER_NM:-1.5}; MEMB_THICK_NM=${MEMB_THICK_NM:-4.0}; TEMP=${TEMP:-310}
 # The leaflet area measurement is reported for every build and stops a build only
 # where the difference is too large to come from the packing. The mean area per
 # lipid of a leaflet is the area of the box, less the area the protein occupies
