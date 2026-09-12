@@ -115,6 +115,8 @@ WATER_BIAS=${WATER_BIAS:-0}; SS_OVERRIDE=${SS_OVERRIDE:-}; TM_RANGE=${TM_RANGE:-
 SS_MODE=${SS_MODE:-dssp}   # dssp = let DSSP assign SS (GPCR/multi-helix); tm = TM ranges helix, rest coil (TM-JM peptides); string = use SS_OVERRIDE
 OUTTAG=${OUTTAG:-memble}; NPROD_STEPS=${NPROD_STEPS:-400000000}
 PARTNER=${PARTNER:-}      # legacy peripheral partner spec; empty = none
+VEL_SEED=${VEL_SEED:-}    # gen-seed for the equilibration; set it to repeat one
+                          # system with independent velocities (see run_replicate.sh)
 SEED=${SEED:-0}           # seeds the random rotation of a peripheral protein ONLY.
                           # It does not reach COBY, so it does not change how the
                           # lipids are packed. Two builds that differ only in SEED
@@ -1062,6 +1064,12 @@ for k in 2 3 4 5 6; do i=$((k-1)); nst=$(awk -v ns="${STAGE_NS[$i]}" -v dt="${ST
     echo "pcoupl = c-rescale"; echo "pcoupltype = semiisotropic"; echo "tau-p = 4.0"
     echo "compressibility = 3e-4 3e-4"; echo "ref-p = 1.0 1.0"; echo "refcoord-scaling = all"
     echo "gen-vel = yes"; echo "gen-temp = $TEMP"; echo "constraints = none"; echo "define = -DPOSRES_STEP$k"
+    # gen-seed is left at the GROMACS default (-1, drawn from the process) unless
+    # VEL_SEED is set. A repeat of one system is made by running the same built
+    # and minimized structure again from a different VEL_SEED, which is the only
+    # thing that separates two runs of one composition: SEED seeds the rotation
+    # of a peripheral protein and does not reach the packing.
+    [ -n "${VEL_SEED:-}" ] && echo "gen-seed = $VEL_SEED"
   } > step6.${k}_equilibration.mdp
 done
 { echo "integrator = md"; echo "dt = 0.02"; echo "nsteps = $NPROD_STEPS"; echo "$RF"

@@ -1342,3 +1342,49 @@ def test_a_lipid_against_a_water_bead_does_not_stop_a_build(tmp_path):
             "--min", "0.12")
     assert p.returncode == 0, p.stdout
     assert "every close pair holds a water bead or an ion" in p.stdout
+
+
+def test_a_repeat_carries_a_different_velocity_seed(tmp_path):
+    """A repeat of one point differs from the run it repeats in gen-seed and in
+    nothing else. run_replicate.sh writes that seed into every equilibration mdp
+    that generates velocities, once per file, and leaves the build alone."""
+    work = tmp_path / "d-20_work"
+    work.mkdir()
+    for f in ("system.gro", "system.top", "index.ndx", "step6.0.gro",
+              "step6.1.gro"):
+        (work / f).write_text("x\n")
+    for k in (2, 3, 4, 5, 6):
+        (work / ("step6.%d_equilibration.mdp" % k)).write_text(
+            "integrator = md\ngen-vel = yes\n")
+    (work / "step7_production.mdp").write_text("integrator = md\nnsteps = 100\n")
+
+    gmx = tmp_path / "gmx"
+    gmx.write_text("#!/usr/bin/env bash\n"
+                   'for a in "$@"; do case $p in -o) touch "$a";; '
+                   '-deffnm) touch "$a.gro";; esac; p=$a; done\nexit 0\n')
+    gmx.chmod(0o755)
+
+    env = dict(os.environ, WORK=str(work), VEL_SEED="7", GMX=str(gmx),
+               R=HELPERS, OUT=str(tmp_path))
+    subprocess.run(["bash", os.path.join(HELPERS, "run_replicate.sh")],
+                   capture_output=True, text=True, env=env)
+
+    rep = tmp_path / "d-20_v7"
+    assert rep.is_dir(), "the repeat got no directory of its own"
+    for k in (2, 3, 4, 5, 6):
+        txt = (rep / ("step6.%d_equilibration.mdp" % k)).read_text()
+        assert txt.count("gen-seed = 7") == 1, txt
+    # the build it repeats is untouched
+    assert "gen-seed" not in (work / "step6.2_equilibration.mdp").read_text()
+
+
+def test_a_repeat_refuses_a_point_that_is_not_built(tmp_path):
+    """Without step6.1.gro there is no minimized structure to run again, and
+    the script says so rather than starting an empty run."""
+    work = tmp_path / "d0_work"
+    work.mkdir()
+    p = subprocess.run(["bash", os.path.join(HELPERS, "run_replicate.sh")],
+                       capture_output=True, text=True,
+                       env=dict(os.environ, WORK=str(work), VEL_SEED="2"))
+    assert p.returncode == 1
+    assert "holds no step6.1.gro" in p.stdout
