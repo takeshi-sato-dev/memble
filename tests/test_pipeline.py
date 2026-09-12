@@ -1270,14 +1270,14 @@ def test_two_water_beads_on_top_of_each_other_do_not_stop_a_build(tmp_path):
     p = run("check_min_distance.py", "--gro", gro, "--lipids", "DLPC",
             "--min", "0.12")
     assert p.returncode == 0, p.stdout
-    assert "water against water" in p.stdout
-    assert "OK, no lipid or protein overlap" in p.stdout
+    assert "holds a water bead or an ion" in p.stdout
+    assert "OK, no overlap between two bonded molecules" in p.stdout
 
 
 def test_a_lipid_packed_into_another_molecule_stops_the_build(tmp_path):
     """The pair that tears a molecule apart when the restraints are eased is
-    the one that holds a lipid or the protein, and the exit code follows it
-    even when a closer water pair is present."""
+    the one in which both beads carry bonds, and the exit code follows it even
+    when a closer water pair is present."""
     gro = tmp_path / "l.gro"
     _gro_pair(gro, [(1, "W", "W", 1.000, 1.0, 1.0),
                     (2, "W", "W", 1.080, 1.0, 1.0),
@@ -1286,6 +1286,22 @@ def test_a_lipid_packed_into_another_molecule_stops_the_build(tmp_path):
     p = run("check_min_distance.py", "--gro", gro, "--lipids", "DLPC",
             "--min", "0.12", expect_zero=False)
     assert p.returncode == 1, p.stdout
-    assert "holds a lipid or the protein" in p.stdout
+    assert "two bonded molecules are 0.090 nm" in p.stdout
     # the water pair is still the closest, and it is still reported
     assert "0.080 nm" in p.stdout
+
+
+def test_a_lipid_against_a_water_bead_does_not_stop_a_build(tmp_path):
+    """A water bead and an ion are single free particles. Neither carries a
+    bond, so the minimization moves one out of a lipid in its first steps and
+    nothing is torn apart. A build stops only when both beads of the pair
+    belong to a molecule that carries bonds."""
+    gro = tmp_path / "lw.gro"
+    _gro_pair(gro, [(1, "PSM", "PO4", 1.000, 1.0, 1.0),
+                    (2, "W", "W", 1.103, 1.0, 1.0),
+                    (3, "DLPC", "NC3", 3.000, 3.0, 3.0),
+                    (4, "NA", "NA", 3.090, 3.0, 3.0)])
+    p = run("check_min_distance.py", "--gro", gro, "--lipids", "DLPC PSM",
+            "--min", "0.12")
+    assert p.returncode == 0, p.stdout
+    assert "every close pair holds a water bead or an ion" in p.stdout

@@ -128,9 +128,18 @@ for d in $DELTAS; do
 
   D="$OUT/d${d}"; W="$D/d${d}_work"
   mkdir -p "$D"; cd "$D" || exit 1
-  if [ ! -f "$W/system.gro" ]; then
+  # The build is finished when memble.sh has written the run inputs, not when
+  # system.gro appears: COBY writes system.gro early, and a build that stops
+  # after it still leaves that file behind. Judging by system.gro sends grompp
+  # into a directory that holds no mdp and no index, and the grompp error then
+  # hides the reason the build stopped.
+  if [ ! -f "$W/step7_production.mdp" ] || [ ! -f "$W/index.ndx" ]; then
     bash "$R/memble.sh" "$PEP" > build.log 2>&1
-    [ -f "$W/system.gro" ] || { echo "  the build did not finish; see $D/build.log"; continue; }
+    if [ ! -f "$W/step7_production.mdp" ] || [ ! -f "$W/index.ndx" ]; then
+      echo "  the build did not finish; see $D/build.log"
+      tail -3 "$D/build.log" | sed 's/^/    /'
+      continue
+    fi
   fi
   cd "$W" || exit 1
   awk '/^[A-Z0-9_]+ +[0-9]+$/{print "    "$0}' system.top
