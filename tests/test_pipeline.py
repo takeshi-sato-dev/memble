@@ -11,6 +11,7 @@ The helper directory defaults to the repository root (the parent of this file)
 and can be overridden with the HELPERS_DIR environment variable.
 """
 
+import io
 import os
 import subprocess
 import sys
@@ -1289,6 +1290,42 @@ def test_a_lipid_packed_into_another_molecule_stops_the_build(tmp_path):
     assert "two bonded molecules are 0.090 nm" in p.stdout
     # the water pair is still the closest, and it is still reported
     assert "0.080 nm" in p.stdout
+
+
+def test_the_tight_declash_pass_opens_a_pair_the_wide_pass_leaves(tmp_path):
+    """The wide pass spreads its effort over every contact below its own
+    target, and a dense box holds thousands of those. The tight pass takes a
+    target just above the gate, sees only the pair that would stop the build,
+    and moves the two molecules that carry it."""
+    rows = [(1, "DLPC", "C1A", 3.000, 3.0, 3.0),
+            (2, "DLPC", "C1B", 3.110, 3.0, 3.0)]
+    # a crowd of water pairs that sit below the wide target and above the tight
+    # one, so the wide pass has plenty to do and the tight pass ignores them
+    rid = 3
+    for k in range(40):
+        x = 1.0 + 0.05 * k
+        rows.append((rid, "W", "W", x, 1.0, 1.0)); rid += 1
+        rows.append((rid, "W", "W", x, 1.0, 1.16)); rid += 1
+    gro = tmp_path / "d.gro"
+    _gro_pair(gro, rows)
+    run("declash_gro.py", "--gro", gro, "--lipids", "DLPC", "--target", "0.13",
+        "--iters", "150", "--exclude-beads", "ROH R3")
+    p = run("check_min_distance.py", "--gro", gro, "--lipids", "DLPC",
+            "--min", "0.12")
+    assert p.returncode == 0, p.stdout
+    assert "OK, no overlap between two bonded molecules" in p.stdout
+
+
+def test_seed_does_not_reach_the_packing(tmp_path):
+    """SEED seeds the rotation of a peripheral protein and nothing else. The
+    stop message used to tell a reader to raise it, and three builds that
+    differed only in SEED returned the same pair at the same distance."""
+    src = io.open(os.path.join(HELPERS, "memble.sh"), encoding="utf-8").read()
+    assert '--seed "$SEED"' in src
+    # the only place the value is used is the peripheral-protein rotation
+    assert src.count('"$SEED"') == 1
+    assert "raise SEED by one" not in src
+    assert "SEED does not change the packing" in src
 
 
 def test_a_lipid_against_a_water_bead_does_not_stop_a_build(tmp_path):

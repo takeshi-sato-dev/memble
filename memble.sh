@@ -73,6 +73,15 @@ COBY_OPT_STEPS=${COBY_OPT_STEPS:-30}   # COBY overlap-optimizer max steps; kept 
                                        # declash (fast post-step) resolves overlaps. Large values
                                        # (100s) can hang for hours on dense/large systems.
 COBY_PUSH=${COBY_PUSH:-1.0}             # COBY lipid-lipid push multiplier (default 1.0)
+# The declash pass runs twice: once at a wide target to open the packing, and
+# once at a target just above the gate to remove the few pairs that are left.
+# The wide pass spreads its effort over every contact below its target, and in a
+# dense box that is tens of thousands of pairs; a molecule whose pushes cancel
+# is then displaced at random and the count stops falling. The tight pass sees
+# only the pairs that would stop the build and moves those alone.
+DECLASH_TARGET=${DECLASH_TARGET:-0.21}        # nm, the wide pass
+DECLASH_TIGHT=${DECLASH_TIGHT:-0.13}          # nm, the tight pass; keep it above MIN_DIST
+DECLASH_TIGHT_ITERS=${DECLASH_TIGHT_ITERS:-150}
 # geometry / thermodynamics
 N_COPY=${N_COPY:-4}; SPACING_NM=${SPACING_NM:-20}; MARGIN_NM=${MARGIN_NM:-8}
 # WATER_NM is the water each side of the protein, in nm, and it is what sets
@@ -106,7 +115,10 @@ WATER_BIAS=${WATER_BIAS:-0}; SS_OVERRIDE=${SS_OVERRIDE:-}; TM_RANGE=${TM_RANGE:-
 SS_MODE=${SS_MODE:-dssp}   # dssp = let DSSP assign SS (GPCR/multi-helix); tm = TM ranges helix, rest coil (TM-JM peptides); string = use SS_OVERRIDE
 OUTTAG=${OUTTAG:-memble}; NPROD_STEPS=${NPROD_STEPS:-400000000}
 PARTNER=${PARTNER:-}      # legacy peripheral partner spec; empty = none
-SEED=${SEED:-0}           # seed for partner random rotation (use replicate index)
+SEED=${SEED:-0}           # seeds the random rotation of a peripheral protein ONLY.
+                          # It does not reach COBY, so it does not change how the
+                          # lipids are packed. Two builds that differ only in SEED
+                          # and carry no peripheral protein are the same build.
 # post-COBY peripheral protein (recommended): give an atomistic PDB + side
 PARTNER_PDB=${PARTNER_PDB:-}                 # atomistic peripheral protein PDB
 PARTNER_SIDE=${PARTNER_SIDE:-upper}          # which leaflet: upper | lower
@@ -666,7 +678,7 @@ must "rebuilding the sterol virtual sites from their itp definitions" \
   "$PY" "$HELPER_FIXVS" --gro system.gro --top system.top --itp-dir "$M3_DIR"
 must "separating overlapping beads left by the packing" \
   "The packing left two beads of different molecules on top of each other.\nRaise BOX_X and BOX_Y by 1 nm and build again, which gives the packing room.\nOr lower the lipid density with a larger COBY_APL.\nTo keep the system and look at it, set MEMBLE_ALLOW_OVERLAP=1." -- \
-  "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target 0.21 --iters 200 --exclude-beads "ROH R3"
+  "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target "$DECLASH_TARGET" --iters 200 --exclude-beads "ROH R3"
 
 # ====================================================================
 # 4b. ADD WATER: COBY builds the membrane in a thin box (a large box_z hangs its
@@ -728,7 +740,17 @@ fi
 # is not distorted or re-split; only solvent and lipids are pushed apart.
 must "the final separation of overlapping beads" \
   "Recentering pushed some lipids or water across the box edge and they now overlap.\nRaise BOX_X and BOX_Y by 1 nm and build again.\nTo keep the system and look at it, set MEMBLE_ALLOW_OVERLAP=1." -- \
-  "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target 0.21 --iters 200 --exclude-beads "ROH R3" --freeze-protein
+  "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target "$DECLASH_TARGET" --iters 200 --exclude-beads "ROH R3" --freeze-protein
+
+# The tight pass. A 32 by 32 nm box holds seven times the molecules of a 12 by
+# 12 nm box, and the wide pass above leaves several thousand contacts below its
+# own target in a box that size. Those contacts are almost all water, and the
+# handful that hold two bonded molecules are the ones that stop the build. This
+# pass takes a target just above the gate, so it sees those few pairs and moves
+# only the molecules that carry them.
+must "separating the last pairs that would stop the build" \
+  "The packing left two bonded molecules closer than ${DECLASH_TIGHT} nm and the tight\ndeclash pass could not open them.\nRaise BOX_X and BOX_Y by 1 nm and build again, which gives the packing room.\nOr lower the lipid density with a larger COBY_APL." -- \
+  "$PY" "$HELPER_DECLASH" --gro system.gro --lipids "${ALL[*]}" --target "$DECLASH_TIGHT" --iters "$DECLASH_TIGHT_ITERS" --exclude-beads "ROH R3" --freeze-protein
 
 # Confirm there is no residual overlap that would give an infinite force. A
 # warning here was read past and the build shipped, so this now stops the build.
@@ -743,7 +765,7 @@ if [ -n "$HELPER_MINDIST" ] && [ -f "$HELPER_MINDIST" ]; then
       echo ">>> LINCS then reports a constraint deviation of millions."
     else
       stop "two bonded molecules are closer than 0.12 nm" \
-        "Minimization does not always separate such a pair. A molecule that is still\noverlapped when the restraints of stage 6.3 are eased is torn apart, and the run\nthen makes no progress. The pair is named just above. A pair holding a water\nbead or an ion does not stop a build: both are single free particles and the\nminimization moves them apart in its first steps.\n  1. build again with another packing:  raise SEED by one\n  2. give the packing room:             raise BOX_X and BOX_Y by 1 nm\n  3. lower the lipid density:           raise COBY_APL\n  4. if the pair holds the protein:     raise SPACING_NM or lower N_COPY\n  5. to keep this system and look at it: export MEMBLE_ALLOW_OVERLAP=1"
+        "Minimization does not always separate such a pair. A molecule that is still\noverlapped when the restraints of stage 6.3 are eased is torn apart, and the run\nthen makes no progress. The pair is named just above. A pair holding a water\nbead or an ion does not stop a build: both are single free particles and the\nminimization moves them apart in its first steps.\nSEED does not change the packing: it seeds the rotation of a peripheral protein\nand nothing else, so building again with another SEED returns the same pair.\n  1. give the packing room:             raise BOX_X and BOX_Y by 1 nm\n  2. lower the lipid density:           raise COBY_APL\n  3. let the packing optimizer work:    raise COBY_OPT_STEPS\n  4. push the last pairs harder:        raise DECLASH_TIGHT_ITERS\n  5. if the pair holds the protein:     raise SPACING_NM or lower N_COPY\n  6. to keep this system and look at it: export MEMBLE_ALLOW_OVERLAP=1"
     fi
   fi
 fi
