@@ -1388,3 +1388,18 @@ def test_a_repeat_refuses_a_point_that_is_not_built(tmp_path):
                        env=dict(os.environ, WORK=str(work), VEL_SEED="2"))
     assert p.returncode == 1
     assert "holds no step6.1.gro" in p.stdout
+
+
+def test_the_packing_seed_reaches_coby_and_is_recorded():
+    """COBY seeds its own generator from the wall clock, so two builds of one
+    composition returned two different packings and a built system could not be
+    built again. COBY_SEED hands COBY an integer instead, and the seed of every
+    build is written into memble_report.json so an old build can be repeated."""
+    src = io.open(os.path.join(HELPERS, "memble.sh"), encoding="utf-8").read()
+    assert '"randseed": int(os.environ["COBY_SEED"])' in src
+    assert "export COBY_SEED" in src
+    assert '"coby_seed"' in src
+    # left empty, COBY keeps the default it always had
+    assert "COBY_SEED=${COBY_SEED:-}" in src
+    # and the advice on a close pair names a lever that reaches the packing
+    assert "set COBY_SEED to another integer" in src

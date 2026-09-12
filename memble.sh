@@ -73,6 +73,14 @@ COBY_OPT_STEPS=${COBY_OPT_STEPS:-30}   # COBY overlap-optimizer max steps; kept 
                                        # declash (fast post-step) resolves overlaps. Large values
                                        # (100s) can hang for hours on dense/large systems.
 COBY_PUSH=${COBY_PUSH:-1.0}             # COBY lipid-lipid push multiplier (default 1.0)
+# COBY seeds its own random number generator from the wall clock, so two builds
+# of one composition return two different packings and a built system cannot be
+# built again. COBY_SEED hands COBY an integer instead, and the build is then
+# reproducible bead for bead. Left empty, COBY keeps its own default, which is
+# what every system built before this option carries; the seed COBY chose is
+# written to coby.log, so an earlier build can be reproduced by reading the seed
+# out of that file and giving it back here.
+COBY_SEED=${COBY_SEED:-}
 # The declash pass runs twice: once at a wide target to open the packing, and
 # once at a target just above the gate to remove the few pairs that are left.
 # The wide pass spreads its effort over every contact below its target, and in a
@@ -516,6 +524,7 @@ fi
 # 4. COBY build (membrane string from composition / leaflets)
 # ====================================================================
 step "packing the lipids around the protein"
+export COBY_SEED
 PACK="optimize_run:yes optimize_max_steps:${COBY_OPT_STEPS} optimize_lipid_push_multiplier:${COBY_PUSH}"
 # Auto-balance the two leaflets of an asymmetric membrane: lipids occupy
 # different areas, so one apl for both leaflets leaves them area-mismatched and
@@ -647,6 +656,8 @@ COBY.COBY(
     solvation="solv:W pos:NA neg:CL salt_molarity:%s" % salt,
     itp_input=["include:%s" % p for p in itps],
     sn="memble", out_sys="system.gro", out_top="system.top", out_log="coby.log",
+    # COBY seeds itself from the wall clock unless it is given a seed
+    **({"randseed": int(os.environ["COBY_SEED"])} if os.environ.get("COBY_SEED") else {}),
 )
 print("COBY build done")
 PYEOF
@@ -767,7 +778,7 @@ if [ -n "$HELPER_MINDIST" ] && [ -f "$HELPER_MINDIST" ]; then
       echo ">>> LINCS then reports a constraint deviation of millions."
     else
       stop "two bonded molecules are closer than 0.12 nm" \
-        "Minimization does not always separate such a pair. A molecule that is still\noverlapped when the restraints of stage 6.3 are eased is torn apart, and the run\nthen makes no progress. The pair is named just above. A pair holding a water\nbead or an ion does not stop a build: both are single free particles and the\nminimization moves them apart in its first steps.\nSEED does not change the packing: it seeds the rotation of a peripheral protein\nand nothing else, so building again with another SEED returns the same pair.\n  1. give the packing room:             raise BOX_X and BOX_Y by 1 nm\n  2. lower the lipid density:           raise COBY_APL\n  3. let the packing optimizer work:    raise COBY_OPT_STEPS\n  4. push the last pairs harder:        raise DECLASH_TIGHT_ITERS\n  5. if the pair holds the protein:     raise SPACING_NM or lower N_COPY\n  6. to keep this system and look at it: export MEMBLE_ALLOW_OVERLAP=1"
+        "Minimization does not always separate such a pair. A molecule that is still\noverlapped when the restraints of stage 6.3 are eased is torn apart, and the run\nthen makes no progress. The pair is named just above. A pair holding a water\nbead or an ion does not stop a build: both are single free particles and the\nminimization moves them apart in its first steps.\nSEED does not change the packing: it seeds the rotation of a peripheral protein\nand nothing else, so building again with another SEED returns the same pair.\n  1. build again with another packing:  set COBY_SEED to another integer\n  2. give the packing room:             raise BOX_X and BOX_Y by 1 nm\n  3. lower the lipid density:           raise COBY_APL\n  4. let the packing optimizer work:    raise COBY_OPT_STEPS\n  5. push the last pairs harder:        raise DECLASH_TIGHT_ITERS\n  6. if the pair holds the protein:     raise SPACING_NM or lower N_COPY\n  7. to keep this system and look at it: export MEMBLE_ALLOW_OVERLAP=1"
     fi
   fi
 fi
@@ -1139,6 +1150,7 @@ fi
   printf '  "salt_M": "%s",\n' "$SALT_M"
   printf '  "temperature_K": "%s",\n' "$TEMP"
   printf '  "m3_dir": "%s",\n' "$M3_DIR"
+  printf '  "coby_seed": "%s",\n' "$(awk -F': *' '/Setting random seed to/{print $2; exit}' coby.log 2>/dev/null)"
   printf '  "gromacs": "%s",\n' "$("$GMX" --version 2>/dev/null | awk -F': *' '/GROMACS version/{print $2; exit}')"
   printf '  "martinize2": "%s",\n' "$("$MARTINIZE2" --version 2>&1 | head -1 | tr -d '"')"
   printf '  "coby": "%s",\n' "$("$PY" -c 'import COBY;print(getattr(COBY,"__version__","unknown"))' 2>/dev/null)"
