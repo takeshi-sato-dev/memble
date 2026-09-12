@@ -878,7 +878,7 @@ done
 # ====================================================================
 # 6. staged restraints: protein BB + every lipid head
 # ====================================================================
-for s in "${UNIQ_SRC[@]}"; do cp "$s" "$(local_for "$s")"; done
+for s in "${UNIQ_SRC[@]}"; do _l=$(local_for "$s"); cp "$s" "$_l"; chmod u+w "$_l"; done
 stage_args(){ local o="" k=1 v; for v in "$@"; do o="$o --stage POSRES_STEP${k}:${v}"; k=$((k+1)); done; echo "$o"; }
 # Map TM_CORE (original residue numbers) to the martinize itp-local numbering
 # (each chain renumbered from 1), so equilibration restrains only the membrane-
