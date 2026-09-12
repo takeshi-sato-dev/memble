@@ -1,3 +1,4 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 """The balance pass corrects a leaflet mismatch only when the check would fail on it.
 
 The pass lives in memble.sh, in the heredoc that ends with BALEOF. These tests
@@ -14,13 +15,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+import memble_source
 SCRIPT = ROOT / "memble.sh"
+SOURCE = memble_source.source(str(ROOT))
 
 
 def _extract_block():
-    text = SCRIPT.read_text()
+    text = SOURCE
     m = re.search(r"<<'BALEOF'\n(.*?)\nBALEOF\n", text, re.S)
-    assert m, "the balance block was not found in memble.sh"
+    assert m, "the balance block was not found in the build"
     return m.group(1)
 
 

@@ -1,3 +1,5 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memble_source
 import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 """
 Automated correctness tests for the helper scripts.
@@ -1245,7 +1247,7 @@ def test_add_water_reports_the_cushion_when_it_sizes_the_box(tmp_path):
 def test_water_nm_default_is_fifteen_angstrom():
     """The default water each side. 1.5 nm puts 3.0 nm between a protein end
     and its periodic image, which is above twice the 1.1 nm Martini cutoff."""
-    src = open(os.path.join(HELPERS, "memble.sh")).read()
+    src = memble_source.source(HELPERS)
     assert "WATER_NM=${WATER_NM:-1.5}" in src
 
 
@@ -1320,7 +1322,7 @@ def test_seed_does_not_reach_the_packing(tmp_path):
     """SEED seeds the rotation of a peripheral protein and nothing else. The
     stop message used to tell a reader to raise it, and three builds that
     differed only in SEED returned the same pair at the same distance."""
-    src = io.open(os.path.join(HELPERS, "memble.sh"), encoding="utf-8").read()
+    src = memble_source.source(HELPERS)
     assert '--seed "$SEED"' in src
     # the only place the value is used is the peripheral-protein rotation
     assert src.count('"$SEED"') == 1
@@ -1395,7 +1397,7 @@ def test_the_packing_seed_reaches_coby_and_is_recorded():
     composition returned two different packings and a built system could not be
     built again. COBY_SEED hands COBY an integer instead, and the seed of every
     build is written into memble_report.json so an old build can be repeated."""
-    src = io.open(os.path.join(HELPERS, "memble.sh"), encoding="utf-8").read()
+    src = memble_source.source(HELPERS)
     assert '"randseed": int(os.environ["COBY_SEED"])' in src
     assert "export COBY_SEED" in src
     assert '"coby_seed"' in src
@@ -1403,3 +1405,55 @@ def test_the_packing_seed_reaches_coby_and_is_recorded():
     assert "COBY_SEED=${COBY_SEED:-}" in src
     # and the advice on a close pair names a lever that reaches the packing
     assert "set COBY_SEED to another integer" in src
+
+
+def test_the_stage_list_and_the_stage_files_agree():
+    """memble.sh carries the defaults and sources the stages under lib/ in the
+    order they run. A file that is on disk and not in the list never runs, and a
+    name in the list with no file stops the build, so the two are kept equal."""
+    listed = [os.path.basename(p) for p in memble_source.stage_files(HELPERS)]
+    assert listed, "memble.sh names no stages"
+    on_disk = sorted(f for f in os.listdir(os.path.join(HELPERS, "lib"))
+                     if f.endswith(".sh"))
+    assert sorted(listed) == on_disk, (listed, on_disk)
+    assert listed == sorted(listed), "the list is not in the order it runs"
+    for p in memble_source.stage_files(HELPERS):
+        first = io.open(p, encoding="utf-8").readline()
+        assert first.startswith("# ") and len(first) > 4, \
+            "%s has no first line saying what it does" % os.path.basename(p)
+
+
+def test_every_declash_pass_goes_through_one_function():
+    """Two hand-written calls is how one of them kept a target the other had
+    moved away from. The helper is named in one place and every pass calls it."""
+    src = memble_source.source(HELPERS)
+    assert src.count("$HELPER_DECLASH") == 1, \
+        "a declash call bypasses declash_pass"
+    assert src.count("declash_pass ") >= 3
+
+
+def test_the_gate_distance_is_written_once():
+    """The gate, the message that names it and the target of the tight declash
+    pass all read one variable, so they cannot drift apart."""
+    src = memble_source.source(HELPERS)
+    assert "MIN_DIST=${MIN_DIST:-0.12}" in src
+    assert '--min "$MIN_DIST"' in src
+    assert "closer than $MIN_DIST nm" in src
+    assert 'DECLASH_TIGHT=${DECLASH_TIGHT:-$(awk -v m="${MIN_DIST:-0.12}"' in src
+
+
+def test_the_plan_says_what_a_build_would_do_and_writes_nothing(tmp_path):
+    """MEMBLE_PLAN=1 answers "what is this command going to build" without
+    building it, and a methods section is written from what it prints."""
+    env = dict(os.environ, M3_DIR=os.path.join(os.path.dirname(HELPERS), "m3"),
+               GMX="/bin/true", MEMBLE_PLAN="1", BOX_X="10", BOX_Y="10",
+               COBY_SEED="777", UPPER="CHOL:1 DLPC:1 PSM:1",
+               LOWER="CHOL:1 DLPC:1 PSM:1")
+    p = subprocess.run(["bash", os.path.join(HELPERS, "memble.sh"),
+                        os.path.join(HELPERS, "tests", "memble_source.py")],
+                       capture_output=True, text=True, cwd=str(tmp_path), env=env)
+    assert p.returncode == 0, p.stderr
+    assert "would build, in this order" in p.stdout
+    assert "10_base.sh" in p.stdout and "97_finish.sh" in p.stdout
+    assert "COBY_SEED            777" in p.stdout
+    assert os.listdir(tmp_path) == [], "the plan wrote something"

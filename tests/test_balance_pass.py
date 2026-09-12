@@ -1,3 +1,4 @@
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 """A balance pass keeps the build it started from until the next one is measured.
 
 The pass rebuilds the whole system, and a rebuild can come back worse than the
@@ -14,7 +15,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+import memble_source
 SCRIPT = ROOT / "memble.sh"
+SOURCE = memble_source.source(str(ROOT))
 
 HARNESS = r"""
 _SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
@@ -38,9 +41,9 @@ echo "KEPT pass=$(cat pass.txt) log=${_BAL_LOG:-none}"
 
 
 def _block():
-    text = SCRIPT.read_text()
+    text = SOURCE
     m = re.search(r"(# 4c\. BALANCE PASS.*?)\n# =+\n# 5\. per-lipid", text, re.S)
-    assert m, "the balance pass was not found in memble.sh"
+    assert m, "the balance pass was not found in the build"
     return "# " + m.group(1)
 
 
