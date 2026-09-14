@@ -2,9 +2,10 @@
 """The four tables of the article, written from the numbers the scripts return.
 
 Table 1  the systems built and measured with MEMBLE
-Table 2  what the leaflet area measurement returns against what was imposed
-Table 3  the six systems of the curve
-Table 4  three builds that were not used in the fit
+Table 2  the composition of each leaflet of the 8 us system, built against run
+Table 3  what the leaflet area measurement returns against what was imposed
+Table 4  the six systems of the curve
+Table 5  three builds that were not used in the fit
 
 Each row names where its numbers come from. Running this file rewrites the CSV
 and the markdown, so the article and the data cannot drift apart.
@@ -53,6 +54,37 @@ write("Table1_systems",
       "of the energy minimization, in kJ/mol/nm.")
 
 # ---------------------------------------------------------------- Table 2
+# The composition of each leaflet of the 8 us system of Section 3.3, as the
+# build assigned it and as the run carried it. Only cholesterol changes
+# leaflet, so each phospholipid count is the count of the build in both rows;
+# what moves is every mole percentage, because cholesterol enters and leaves
+# the denominator. The cholesterol figures are the mean over 1 to 8 us, from
+# dipc_8us.json, and the phospholipid counts are from system.top.
+LEAFLET = {
+    "upper": {"DLPC": 500, "PSM": 500, "CHOL": (501, 535.5)},
+    "lower": {"DLPC": 468, "DOPS": 468, "CHOL": (468, 433.5)},
+}
+SPECIES = ["DLPC", "PSM", "DOPS", "CHOL"]
+
+
+def _leaflet_row(side, which):
+    d = LEAFLET[side]
+    n = {k: (v[which] if isinstance(v, tuple) else v) for k, v in d.items()}
+    tot = sum(n.values())
+    return [("%.1f" % (100.0 * n[sp] / tot)) if sp in n else "—" for sp in SPECIES]
+
+
+write("Table2_leaflet_composition",
+      ["leaflet", "", "DLPC", "sphingomyelin", "DOPS", "cholesterol"],
+      [[side, label] + _leaflet_row(side, i)
+       for side in ("upper", "lower") for i, label in ((0, "built"), (1, "run"))],
+      "**Table 2.** The composition of each leaflet of the 8 \u03bcs system, as the "
+      "build assigned it and as the run carried it, in mol% over the molecules of "
+      "that leaflet. The cholesterol figures are the mean from 1 to 8 \u03bcs. No "
+      "phospholipid changed leaflet, and the phospholipid ratio of each leaflet is "
+      "therefore the ratio of the build throughout.")
+
+# ---------------------------------------------------------------- Table 3
 # The packing places the molecules from a random start, so each of the four
 # pairs of areas per lipid was built four or five times over. The arrays below
 # hold the signed difference between the two leaflets, in per cent, read from
@@ -116,7 +148,7 @@ _bl, _ble, _al, _ale, _sl = _fit([m for m, _ in _LM])
 _bc, _bce, _ac, _ace, _sc = _fit([m for m, _ in _CM])
 _bd, _bde, _ad, _ade, _sd = _fit([m for m, _ in _DM])
 
-write("Table2_leaflet_areas",
+write("Table3_leaflet_areas",
       ["build", "area per lipid, upper / lower (nm2)", "imposed difference (%)",
        "builds", "difference between the leaflet means (%)",
        "cholesterol (%)", "DLPC (%)", "verdict at the 8% tolerance"],
@@ -126,7 +158,7 @@ write("Table2_leaflet_areas",
         "%+.1f \u00b1 %.1f" % _CM[i],
         "%+.1f \u00b1 %.1f" % _DM[i],
         _verdict(i)] for i in range(4)],
-      "**Table 2.** What the leaflet area measurement returns against what was "
+      "**Table 3.** What the leaflet area measurement returns against what was "
       "imposed on it. One composition, built in a 12 by 12 by 16 nm box with four "
       "pairs of areas per lipid handed to the packing and nothing else changed. The "
       "mean of the pair is 0.70 nm2 in all four. The packing places the molecules "
@@ -140,21 +172,21 @@ write("Table2_leaflet_areas",
       "%+.1f \u00b1 %.1f. `table2_fit.py` returns these."
       % (_bl, _ble, _al, _ale, _bc, _bce, _ac, _ace, _bd, _bde, _ad, _ade))
 
-# ---------------------------------------------------------------- Table 3
+# ---------------------------------------------------------------- Table 4
 D = [-20, -12, -6, 0, 6, 12]
 PU = np.array([120, 128, 134, 140, 146, 152]); PL = np.array([153, 145, 139, 132, 126, 120])
 F = 100.0 * (PU - PL) / (PU + PL)
 C = np.array([64.78, 63.20, 61.17, 56.86, 50.26, 46.36])
 SD = ["2.69", "", "", "1.71", "", ""]; N = [3, 1, 1, 3, 1, 1]
 Q = np.polyfit(F, C, 2)
-write("Table3_curve",
+write("Table4_curve",
       ["DLPC moved from the upper leaflet", "phospholipids upper / lower",
        "imbalance f (%)", "cholesterol of the upper leaflet after the run (%)",
        "standard deviation over three runs", "runs", "the fit (%)", "residual (points)"],
       [["%+d" % D[i], "%d / %d" % (PU[i], PL[i]), "%+.2f" % F[i], "%.2f" % C[i],
         SD[i], N[i], "%.2f" % np.polyval(Q, F[i]), "%+.2f" % (C[i] - np.polyval(Q, F[i]))]
        for i in range(6)],
-      "**Table 3.** The six systems of the curve and where cholesterol settled in each. "
+      "**Table 4.** The six systems of the curve and where cholesterol settled in each. "
       "The six differ only in how the DLPC molecules were divided between the leaflets; "
       "every one was built with 71 cholesterol molecules in the upper leaflet and 63 in "
       "the lower, which is %.2f%% of the cholesterol above. The imbalance of each system "
@@ -163,16 +195,16 @@ write("Table3_curve",
       "`curve_stats.py` returns every number of this table."
       % (BUILT, Q[2], Q[1], Q[0], np.sqrt(np.mean((C - np.polyval(Q, F)) ** 2))))
 
-# ---------------------------------------------------------------- Table 4
+# ---------------------------------------------------------------- Table 5
 ROUTE = [("equal numbers (EqN)", -1, -0.37, 57.59, 2.26, 3),
          ("areas measured on the packed system (none of the four)", 3, 1.10, 57.43, 0.55, 2),
          ("areas from a table of reported values (SA)", 8, 2.94, 54.70, 1.84, 3)]
-write("Table4_routes",
+write("Table5_routes",
       ["build", "phospholipids upper − lower", "imbalance f (%)",
        "the curve (%)", "measured (%)", "standard error", "runs"],
       [[n, "%+d" % d, "%+.2f" % f, "%.2f" % np.polyval(Q, f),
         "%.2f" % m, "%.2f" % e, r] for n, d, f, m, e, r in ROUTE],
-      "**Table 4.** Three builds that were not used in the fit, against what the curve "
+      "**Table 5.** Three builds that were not used in the fit, against what the curve "
       "returns for each. The three were built from one composition with a separate "
       "script and run for 500 ns from three sets of starting velocities. Two of the "
       "three are routes of Section 1; the third is none of the four. The measured "
