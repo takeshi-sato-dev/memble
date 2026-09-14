@@ -213,8 +213,12 @@ def main():
         nmol = int(m.sum())
         rate_late = ((l_up + l_dn) / span_late * 1000.0) if span_late > 0 else float("nan")
         rate_early = ((e_up + e_dn) / span_early * 1000.0) if span_early > 0 else float("nan")
+        crossed = (cr.up_early + cr.dn_early + cr.up_late + cr.dn_late) > 0
         out["species"][s_name] = {
             "n_molecules": nmol,
+            "n_molecules_that_crossed": int(crossed[m].sum()),
+            "most_by_one_molecule": int(
+                (cr.up_early + cr.dn_early + cr.up_late + cr.dn_late)[m].max()),
             "crossings_total": tot_up + tot_dn,
             "crossings_up": tot_up, "crossings_down": tot_dn,
             "crossings_per_molecule": (tot_up + tot_dn) / float(nmol),
@@ -227,9 +231,12 @@ def main():
                               "span_ns": span_late,
                               "crossings_per_us": rate_late},
         }
-        print("%-8s %7d %9d %9.2f %9d   %8.1f before / %8.1f after"
+        print("%-8s %7d %9d %9.2f %9d   %8.1f before / %8.1f after   "
+              "%d of %d molecules crossed, most %d times"
               % (s_name, nmol, tot_up + tot_dn, (tot_up + tot_dn) / float(nmol),
-                 n1 - n0, rate_early, rate_late))
+                 n1 - n0, rate_early, rate_late,
+                 int(crossed[m].sum()), nmol,
+                 int((cr.up_early + cr.dn_early + cr.up_late + cr.dn_late)[m].max())))
 
     print("")
     print("net is where the composition settled. crossings is how often a molecule")

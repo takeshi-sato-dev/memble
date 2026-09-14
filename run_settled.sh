@@ -33,7 +33,7 @@ done
 OUT=${OUT:-$HOME/counts_run}
 SRC=${SRC:-table}                 # the arm whose settled composition is used
 SEED=${SEED:-1}
-PROD_NS=${PROD_NS:-200}
+PROD_NS=${PROD_NS:-250}
 NT=${NT:-8}
 GPU=${GPU:-1}
 D=$OUT/settled; W=$D/settled_work

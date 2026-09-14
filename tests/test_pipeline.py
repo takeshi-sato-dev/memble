@@ -1403,3 +1403,17 @@ def test_the_packing_seed_reaches_coby_and_is_recorded():
     assert "COBY_SEED=${COBY_SEED:-}" in src
     # and the advice on a close pair names a lever that reaches the packing
     assert "set COBY_SEED to another integer" in src
+
+
+def test_the_build_record_carries_the_areas_handed_to_the_packing():
+    """Table 2 compares the difference between the two areas per lipid a build
+    handed to the packing with the difference the finished bilayer returns. The
+    first of those is an input, and until this was added the input was in no
+    file, so the table could not be checked without the build being repeated."""
+    src = io.open(os.path.join(HELPERS, "memble.sh"), encoding="utf-8").read()
+    for key in ('"coby_apl_nm2"', '"apl_upper_nm2"', '"apl_lower_nm2"',
+                '"auto_balance"', '"balance_iterations"'):
+        assert key in src, key
+    # the values written are the ones the packing was given, not measurements
+    assert '"apl_upper_nm2": "%s",\\n\' "$APL_UP"' in src
+    assert '"apl_lower_nm2": "%s",\\n\' "$APL_LO"' in src

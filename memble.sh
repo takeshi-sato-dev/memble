@@ -33,7 +33,7 @@
 #
 set -eo pipefail
 
-MEMBLE_VERSION=1.2.2
+MEMBLE_VERSION=1.2.3
 _SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 _START_DIR=$(pwd)
 _ARG1=${1:-}
@@ -1151,6 +1151,14 @@ fi
   printf '  "temperature_K": "%s",\n' "$TEMP"
   printf '  "m3_dir": "%s",\n' "$M3_DIR"
   printf '  "coby_seed": "%s",\n' "$(awk -F': *' '/Setting random seed to/{print $2; exit}' coby.log 2>/dev/null)"
+  # The areas per lipid handed to the packing. These two are inputs to the build
+  # and not measurements of it, and a table that compares what was imposed with
+  # what the finished bilayer returns needs the imposed pair on record.
+  printf '  "coby_apl_nm2": "%s",\n' "$COBY_APL"
+  printf '  "apl_upper_nm2": "%s",\n' "$APL_UP"
+  printf '  "apl_lower_nm2": "%s",\n' "$APL_LO"
+  printf '  "auto_balance": "%s",\n' "$AUTO_BALANCE"
+  printf '  "balance_iterations": "%s",\n' "${MEMBLE_BALANCE_ITER:-}"
   printf '  "gromacs": "%s",\n' "$("$GMX" --version 2>/dev/null | awk -F': *' '/GROMACS version/{print $2; exit}')"
   printf '  "martinize2": "%s",\n' "$("$MARTINIZE2" --version 2>&1 | head -1 | tr -d '"')"
   printf '  "coby": "%s",\n' "$("$PY" -c 'import COBY;print(getattr(COBY,"__version__","unknown"))' 2>/dev/null)"
@@ -1173,6 +1181,9 @@ if [ -f "$HELPER_VERIFY" ]; then
           --ss-mode "$SS_SOURCE" --meta memble_build.json
           --leaflet-json leaflet_area.json)
   [ -n "$SS_USED" ]  && VERIFY+=(--ss-string "$SS_USED")
+  # the string covers one copy of the protein, and the system carries
+  # N_COPY of them; verify_system.py multiplies the two before comparing
+  VERIFY+=(--n-copy "$N_COPY")
   [ -n "$TM_RANGE" ] && VERIFY+=(--tm-resids "$TM_RANGE")
   [ -n "$UPPER" ]    && VERIFY+=(--expect-upper "$UPPER")
   [ -n "$LOWER" ]    && VERIFY+=(--expect-lower "$LOWER")

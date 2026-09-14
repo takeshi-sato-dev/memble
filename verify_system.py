@@ -281,6 +281,10 @@ def main():
                          "are read as well.")
     ap.add_argument("--lipids", default="")
     ap.add_argument("--ss-string", default="")
+    # martinize2 coarse-grains one copy of the protein and
+    # replicate_and_fix_top.py writes the copies, so --ss-string covers one
+    # copy while the system carries n_copy of them.
+    ap.add_argument("--n-copy", type=int, default=1)
     ap.add_argument("--ss-mode", default="")
     ap.add_argument("--tm-resids", default="")
     ap.add_argument("--expect-upper", default="")
@@ -338,13 +342,22 @@ def main():
                 "one cannot be reproduced.",
                 measured=None, expected="a string of %d characters" % n_prot_res)
     else:
-        ok = len(args.ss_string) == n_prot_res
+        # The string covers one copy of the protein, and the system carries
+        # n_copy of them, so the string covers the system when the two
+        # multiply out to the number of protein residues. Versions up to 1.2.2
+        # compared the length of the string against that number directly, and
+        # failed every build that carried more than one copy.
+        n_ss = len(args.ss_string)
+        copies = max(1, int(getattr(args, "n_copy", 1) or 1))
+        ok = n_ss * copies == n_prot_res
         rep.add("secondary_structure", ok,
-                "the string covers every protein residue" if ok else
+                ("the string covers every protein residue" if copies == 1 else
+                 "the string covers every protein residue of each of the %d "
+                 "copies" % copies) if ok else
                 "the string and the protein disagree on the number of residues; "
                 "martinize2 assigned bonded parameters to a different set of "
                 "residues from the ones in the system.",
-                measured=len(args.ss_string), expected=n_prot_res)
+                measured=n_ss * copies, expected=n_prot_res)
 
     # --- 2. composition ---------------------------------------------------
     if "composition" in skip:

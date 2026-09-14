@@ -119,3 +119,41 @@ def test_the_rate_is_reported_before_and_after_the_composition_settles(tmp_path)
     assert c["before_settled"]["up"] + c["before_settled"]["down"] == 1
     assert c["after_settled"]["up"] + c["after_settled"]["down"] == 4
     assert c["after_settled"]["crossings_per_us"] > 0
+
+
+def test_the_imbalance_of_a_curve_point_comes_from_its_counts(tmp_path):
+    """The imbalance of a point is the difference between the two phospholipid
+    numbers over their sum, and those two numbers are read from the topology of
+    that build. Writing the imbalance as a function of delta gives the wrong
+    answer at two of the six points, because the packing rounds the ratio of the
+    minor species and puts one more molecule in the lower leaflet there."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bigread", str(ROOT / "bigread.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    for delta, f in ((-20, -11.76), (-12, -6.23), (-6, -1.83),
+                     (0, 2.94), (6, 7.35), (12, 11.76)):
+        up, lo = m.COUNTS[delta]
+        got = m.imbalance_from_counts(up, lo)
+        assert abs(got - f) < 0.01, (delta, got, f)
+    # the packing rounds the minor species, so the total is not the same at
+    # every point and the imbalance cannot be written as a function of delta
+    totals = sorted(set(sum(v) for v in m.COUNTS.values()))
+    assert totals == [272, 273], totals
+
+
+def test_the_curve_in_bigread_matches_the_fit(tmp_path):
+    """bigread.py carries the quadratic as three constants, and those three have
+    to be the ones curve_stats.py returns from the six points."""
+    import importlib.util
+    import numpy as np
+    spec = importlib.util.spec_from_file_location("bigread", str(ROOT / "bigread.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    spec2 = importlib.util.spec_from_file_location("cs", str(ROOT / "curve_stats.py"))
+    cs = importlib.util.module_from_spec(spec2)
+    spec2.loader.exec_module(cs)
+    q = np.polyfit(cs.F, cs.C, 2)
+    assert abs(m.A2 - q[0]) < 1e-5, (m.A2, q[0])
+    assert abs(m.A1 - q[1]) < 1e-4, (m.A1, q[1])
+    assert abs(m.A0 - q[2]) < 1e-3, (m.A0, q[2])
